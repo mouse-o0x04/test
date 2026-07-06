@@ -74,8 +74,12 @@ export function useColumnSettings(entity: string, defaultColumns: ColumnDef[]) {
   }, [save, defaultColumns]);
 
   const orderedVisibleKeys = useMemo(
-    () => state.order.filter((k) => isVisible(k)),
-    [state.order, isVisible]
+    () => {
+      const visible = state.order.filter((k) => isVisible(k));
+      const alwaysShowKeys = defaultColumns.filter((c) => c.alwaysShow && !visible.includes(c.key)).map((c) => c.key);
+      return [...visible, ...alwaysShowKeys];
+    },
+    [state.order, isVisible, defaultColumns]
   );
 
   return { state, isVisible, toggle, moveUp, moveDown, reset, orderedVisibleKeys };

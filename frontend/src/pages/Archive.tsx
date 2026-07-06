@@ -69,7 +69,7 @@ export default function ArchivePage() {
     });
   };
 
-  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
+  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
   const { data: designerColors } = useQuery<OrderSettingsItem[]>({ queryKey: ["orderSettings", "designer_color"], queryFn: () => getOrderSettings("designer_color") });
   const { data: workerColors } = useQuery<OrderSettingsItem[]>({ queryKey: ["orderSettings", "worker_color"], queryFn: () => getOrderSettings("worker_color") });
   const { data: layoutOptions } = useQuery<OrderSettingsItem[]>({ queryKey: ["orderSettings", "layout"], queryFn: () => getOrderSettings("layout") });

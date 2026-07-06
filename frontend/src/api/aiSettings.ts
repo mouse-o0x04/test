@@ -8,6 +8,7 @@ export interface AIProviderSettings {
   model_name: string;
   temperature: number;
   max_tokens: number;
+  timeout: number;
   system_prompt?: string;
   is_active: boolean;
   created_at?: string;
@@ -21,6 +22,7 @@ export interface AIProviderSettingsUpdate {
   model_name?: string;
   temperature?: number;
   max_tokens?: number;
+  timeout?: number;
   system_prompt?: string;
   is_active?: boolean;
 }

@@ -19,6 +19,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useMenuOrder } from "../hooks/useMenuOrder";
+import { useResponsive } from "../hooks/useResponsive";
 
 interface NavItem {
   key: string;
@@ -44,6 +45,7 @@ export default function NocodbLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { isMobile } = useResponsive();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const navItems = user?.is_superuser ? defaultNavItems : defaultNavItems.filter((i) => i.key !== "/settings");
   const { orderedItems, moveUp, moveDown, reset, order } = useMenuOrder(navItems);
@@ -116,43 +118,45 @@ export default function NocodbLayout({ children }: { children: ReactNode }) {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      {/* NocoDB-style minibar */}
-      <div className="nc-minibar">
-        <div className="nc-minibar-logo" onClick={() => navigate("/")}>
-          Т
-        </div>
+      {/* NocoDB-style minibar - hidden on mobile */}
+      {!isMobile && (
+        <div className="nc-minibar">
+          <div className="nc-minibar-logo" onClick={() => navigate("/")}>
+            Т
+          </div>
 
-        <div className="nc-minibar-items">
-          {orderedItems.map((item) => (
-            <Tooltip key={item.key} title={item.tooltip} placement="right">
-              <button
-                className={`nc-minibar-item ${activeItem === item.key ? "active" : ""}`}
-                onClick={() => navigate(item.key)}
-              >
-                {item.icon}
+          <div className="nc-minibar-items">
+            {orderedItems.map((item) => (
+              <Tooltip key={item.key} title={item.tooltip} placement="right">
+                <button
+                  className={`nc-minibar-item ${activeItem === item.key ? "active" : ""}`}
+                  onClick={() => navigate(item.key)}
+                >
+                  {item.icon}
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+
+          <div className="nc-minibar-bottom">
+            <Popover content={menuSettingsContent} title="Настройка меню" trigger="click" placement="right">
+              <Tooltip title="Настроить меню" placement="right">
+                <button className="nc-minibar-item">
+                  <MenuUnfoldOutlined />
+                </button>
+              </Tooltip>
+            </Popover>
+            <Tooltip title="Выйти" placement="right">
+              <button className="nc-minibar-item" onClick={logout}>
+                <LogoutOutlined />
               </button>
             </Tooltip>
-          ))}
+          </div>
         </div>
-
-        <div className="nc-minibar-bottom">
-          <Popover content={menuSettingsContent} title="Настройка меню" trigger="click" placement="right">
-            <Tooltip title="Настроить меню" placement="right">
-              <button className="nc-minibar-item">
-                <MenuUnfoldOutlined />
-              </button>
-            </Tooltip>
-          </Popover>
-          <Tooltip title="Выйти" placement="right">
-            <button className="nc-minibar-item" onClick={logout}>
-              <LogoutOutlined />
-            </button>
-          </Tooltip>
-        </div>
-      </div>
+      )}
 
       {/* Main content */}
-      <div className="nc-main">
+      <div className="nc-main" style={isMobile ? { marginLeft: 0, paddingBottom: 60 } : {}}>
         {/* Header */}
         <div className="nc-header">
           <div className="nc-header-left">
@@ -177,7 +181,7 @@ export default function NocodbLayout({ children }: { children: ReactNode }) {
                 >
                   {(user?.username || "U")[0].toUpperCase()}
                 </div>
-                <Typography.Text style={{ fontSize: 13 }}>{user?.username}</Typography.Text>
+                {!isMobile && <Typography.Text style={{ fontSize: 13 }}>{user?.username}</Typography.Text>}
               </div>
             </Dropdown>
           </div>
@@ -188,6 +192,46 @@ export default function NocodbLayout({ children }: { children: ReactNode }) {
           {children}
         </div>
       </div>
+
+      {/* Mobile bottom navigation */}
+      {isMobile && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 56,
+          background: "#1e1e2d",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-around",
+          borderTop: "1px solid #333",
+          zIndex: 1000,
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}>
+          {orderedItems.slice(0, 5).map((item) => (
+            <button
+              key={item.key}
+              onClick={() => navigate(item.key)}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 2,
+                background: "none",
+                border: "none",
+                color: activeItem === item.key ? "#3b82f6" : "#8c8c8c",
+                fontSize: 10,
+                cursor: "pointer",
+                padding: "4px 8px",
+              }}
+            >
+              <span style={{ fontSize: 18 }}>{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

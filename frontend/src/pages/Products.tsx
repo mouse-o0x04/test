@@ -6,6 +6,7 @@ import {
   Descriptions,
   Divider,
   Drawer,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -14,6 +15,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Tooltip,
@@ -214,8 +216,12 @@ export default function ProductsPage() {
           }
         }} />
       ) : (
-        <Row gutter={[16, 16]}>
-          {(filteredData ?? []).map((p) => (
+        <Spin spinning={isLoading}>
+          {(filteredData ?? []).length === 0 && !isLoading ? (
+            <Empty description="Нет продуктов" style={{ margin: "40px 0" }} />
+          ) : (
+          <Row gutter={[16, 16]}>
+            {(filteredData ?? []).map((p) => (
             <Col key={p.id} xs={24} sm={12} md={8} lg={6}>
               <Card
                 hoverable
@@ -246,6 +252,8 @@ export default function ProductsPage() {
             </Col>
           ))}
         </Row>
+          )}
+        </Spin>
       )}
 
       <Modal title={editing ? "Редактировать продукт" : "Новый продукт"} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.validateFields().then(onFinish).catch(() => {})} confirmLoading={createMutation.isPending || updateMutation.isPending}>

@@ -1,10 +1,13 @@
 import { ClockCircleOutlined, RightOutlined, LeftOutlined } from "@ant-design/icons";
 import { Button, DatePicker, Space, Tag, Tooltip, Typography } from "antd";
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from "@dnd-kit/core";
+import { useDroppable } from "@dnd-kit/core";
+import { useDraggable } from "@dnd-kit/core";
 import dayjs from "dayjs";
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { useResponsive } from "../hooks/useResponsive";
 import type { Order, OrderSettingsItem } from "../types";
-import { ORDER_STATUSES } from "../types";
 
 const { RangePicker } = DatePicker;
 
@@ -38,27 +41,117 @@ interface KanbanBoardProps {
 function getStatusConfig(status: string, statusColors?: OrderSettingsItem[]): { label: string; color: string; bg: string } {
   const def = DEFAULT_STATUS_CONFIG[status] || DEFAULT_STATUS_CONFIG.new;
   const custom = statusColors?.find((s) => s.name === def.label);
-  return {
-    label: custom?.name || def.label,
-    color: custom?.color || def.color,
-    bg: STATUS_BG[status] || def.bg,
-  };
-}
-
-function getStatusLabel(status: string, statusColors?: OrderSettingsItem[]): string {
-  const def = DEFAULT_STATUS_CONFIG[status];
-  const custom = statusColors?.find((s) => s.name === def?.label);
-  return custom?.name || def?.label || status;
+  return { label: custom?.name || def.label, color: custom?.color || def.color, bg: STATUS_BG[status] || def.bg };
 }
 
 const getColor = (settings: OrderSettingsItem[] | undefined, name: string): string => {
   return settings?.find((s) => s.name === name)?.color || "#1677ff";
 };
 
+function DraggableCard({ order, status, showLeft, showRight, onSelectOrder, moveLeft, moveRight, canViewPrices, statusColors, designerColors, workerColors, layoutOptions, sourceOptions }: {
+  order: Order; status: string; showLeft: boolean; showRight: boolean;
+  onSelectOrder?: (order: Order) => void; moveLeft: (id: number, s: string) => void; moveRight: (id: number, s: string) => void;
+  canViewPrices: boolean; statusColors?: OrderSettingsItem[]; designerColors?: OrderSettingsItem[];
+  workerColors?: OrderSettingsItem[]; layoutOptions?: OrderSettingsItem[]; sourceOptions?: OrderSettingsItem[];
+}) {
+  const cfg = getStatusConfig(status, statusColors);
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `order-${order.id}`, data: { order, status } });
+
+  const style: React.CSSProperties = {
+    transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 100 : "auto" as unknown as number,
+    background: "#fff", borderRadius: 8, padding: 12, marginBottom: 8,
+    border: `1px solid ${isDragging ? cfg.color : "#f0f0f0"}`,
+    cursor: "grab", boxShadow: isDragging ? `0 4px 12px ${cfg.color}33` : "0 1px 2px rgba(0,0,0,0.06)",
+    transition: "box-shadow 0.2s, border-color 0.2s",
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...listeners} {...attributes} onClick={() => onSelectOrder?.(order)}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>#{order.id}</Typography.Text>
+        <Space size={4}>
+          {showLeft && <Button type="text" size="small" icon={<LeftOutlined />} onClick={(e) => { e.stopPropagation(); moveLeft(order.id, status); }} style={{ padding: 0, width: 20, height: 20 }} />}
+          {showRight && <Button type="text" size="small" icon={<RightOutlined />} onClick={(e) => { e.stopPropagation(); moveRight(order.id, status); }} style={{ padding: 0, width: 20, height: 20 }} />}
+        </Space>
+      </div>
+      <Typography.Text strong style={{ display: "block", marginBottom: 4, fontSize: 13 }} ellipsis={{ tooltip: order.description || order.items?.map((i) => i.product_name || `#${i.product_id}`).join(", ") }}>
+        {order.description || (order.items?.length ? order.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${order.id}`)}
+      </Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+        {order.client_name || `Клиент #${order.client_id}`}
+      </Typography.Text>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
+        {order.designer && <Tag color={getColor(designerColors, order.designer)} style={{ fontSize: 11, margin: 0 }}>{order.designer}</Tag>}
+        {order.layout_type && <Tag color={getColor(layoutOptions, order.layout_type)} style={{ fontSize: 11, margin: 0 }}>{order.layout_type}</Tag>}
+        {order.source && <Tag color={getColor(sourceOptions, order.source)} style={{ fontSize: 11, margin: 0 }}>{order.source}</Tag>}
+      </div>
+      {order.workers && order.workers.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
+          {order.workers.map((w) => <Tag key={w} color={getColor(workerColors, w)} style={{ fontSize: 10, margin: 0 }}>{w}</Tag>)}
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        {canViewPrices && <Typography.Text strong style={{ fontSize: 13, color: "#1677ff" }}>{order.total_price.toLocaleString()} ₽</Typography.Text>}
+        {order.deadline && (
+          <Tooltip title={dayjs(order.deadline).format("DD.MM.YYYY")}>
+            <Space size={2}>
+              <ClockCircleOutlined style={{ fontSize: 11, color: dayjs(order.deadline).isBefore(dayjs()) ? "#ff4d4f" : "#8c8c8c" }} />
+              <Typography.Text type={dayjs(order.deadline).isBefore(dayjs()) ? "danger" : "secondary"} style={{ fontSize: 11 }}>{dayjs(order.deadline).format("DD.MM")}</Typography.Text>
+            </Space>
+          </Tooltip>
+        )}
+      </div>
+      {order.items && order.items.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {order.items.map((item) => (
+            <Tooltip key={item.id} title={`${item.product_name || `#${item.product_id}`} × ${item.quantity}${item.product_unit ? " " + item.product_unit : ""}`}>
+              <Tag style={{ fontSize: 11, margin: 0, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {item.product_name || `#${item.product_id}`} × {item.quantity}{item.product_unit ? " " + item.product_unit : ""}
+              </Tag>
+            </Tooltip>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DroppableColumn({ status, cfg, items, children }: { status: string; cfg: { label: string; color: string; bg: string }; items: Order[]; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `column-${status}` });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        minWidth: 240, maxWidth: 280, flex: "0 0 auto",
+        background: isOver ? `${cfg.color}15` : cfg.bg,
+        borderRadius: 12, padding: 8,
+        border: isOver ? `2px dashed ${cfg.color}` : "2px solid transparent",
+        transition: "background 0.2s, border 0.2s",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", marginBottom: 8 }}>
+        <div style={{ width: 10, height: 10, borderRadius: "50%", background: cfg.color }} />
+        <Typography.Text strong style={{ fontSize: 13 }}>{cfg.label}</Typography.Text>
+        <Tag style={{ marginLeft: "auto", fontSize: 11 }}>{items.length}</Tag>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export default function KanbanBoard({ orders, onMoveOrder, onSelectOrder, designerColors, workerColors, layoutOptions, sourceOptions, statusColors }: KanbanBoardProps) {
   const { hasPermission } = useAuth();
+  const { isMobile } = useResponsive();
   const canViewPrices = hasPermission("prices.view");
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
+  const [activeOrder, setActiveOrder] = useState<Order | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
 
   const filteredOrders = orders.filter((o) => {
     if (!dateRange) return true;
@@ -73,142 +166,37 @@ export default function KanbanBoard({ orders, onMoveOrder, onSelectOrder, design
     return acc;
   }, {});
 
-  const handleDragStart = (e: React.DragEvent, orderId: number) => {
-    e.dataTransfer.setData("orderId", String(orderId));
-    e.dataTransfer.effectAllowed = "move";
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDrop = (e: React.DragEvent, targetStatus: string) => {
-    e.preventDefault();
-    const orderId = Number(e.dataTransfer.getData("orderId"));
-    if (orderId) {
-      onMoveOrder(orderId, targetStatus);
-    }
-  };
-
   const moveLeft = (orderId: number, currentStatus: string) => {
     const idx = MAIN_STATUSES.indexOf(currentStatus);
-    if (idx > 0) {
-      onMoveOrder(orderId, MAIN_STATUSES[idx - 1]);
-    }
+    if (idx > 0) onMoveOrder(orderId, MAIN_STATUSES[idx - 1]);
   };
 
   const moveRight = (orderId: number, currentStatus: string) => {
     const idx = MAIN_STATUSES.indexOf(currentStatus);
-    if (idx < MAIN_STATUSES.length - 1) {
-      onMoveOrder(orderId, MAIN_STATUSES[idx + 1]);
-    }
+    if (idx < MAIN_STATUSES.length - 1) onMoveOrder(orderId, MAIN_STATUSES[idx + 1]);
   };
 
-  const renderCard = (order: Order, status: string, showLeft: boolean, showRight: boolean) => {
-    const cfg = getStatusConfig(status, statusColors);
-    return (
-      <div
-        key={order.id}
-        draggable
-        onDragStart={(e) => handleDragStart(e, order.id)}
-        onClick={() => onSelectOrder?.(order)}
-        style={{
-          background: "#fff",
-          borderRadius: 8,
-          padding: 12,
-          marginBottom: 8,
-          border: "1px solid #f0f0f0",
-          cursor: "pointer",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-          transition: "box-shadow 0.2s, border-color 0.2s",
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = cfg.color; (e.currentTarget as HTMLDivElement).style.boxShadow = `0 2px 8px ${cfg.color}33`; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "#f0f0f0"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 2px rgba(0,0,0,0.06)"; }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>#{order.id}</Typography.Text>
-          <Space size={4}>
-            {showLeft && (
-              <Button type="text" size="small" icon={<LeftOutlined />} onClick={(e) => { e.stopPropagation(); moveLeft(order.id, status); }} style={{ padding: 0, width: 20, height: 20 }} />
-            )}
-            {showRight && (
-              <Button type="text" size="small" icon={<RightOutlined />} onClick={(e) => { e.stopPropagation(); moveRight(order.id, status); }} style={{ padding: 0, width: 20, height: 20 }} />
-            )}
-          </Space>
-        </div>
-        <Typography.Text strong style={{ display: "block", marginBottom: 4, fontSize: 13 }} ellipsis={{ tooltip: order.description || order.items?.map((i) => i.product_name || `#${i.product_id}`).join(", ") }}>
-          {order.description || (order.items?.length
-            ? order.items.map((i) => i.product_name || `#${i.product_id}`).join(", ")
-            : `Заказ #${order.id}`)}
-        </Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-          {order.client_name || `Клиент #${order.client_id}`}
-        </Typography.Text>
+  const handleDragStart = (event: DragStartEvent) => {
+    const { active } = event;
+    const order = (active.data.current as { order: Order })?.order;
+    if (order) setActiveOrder(order);
+  };
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
-          {order.designer && (
-            <Tag color={getColor(designerColors, order.designer)} style={{ fontSize: 11, margin: 0 }}>
-              {order.designer}
-            </Tag>
-          )}
-          {order.layout_type && (
-            <Tag color={getColor(layoutOptions, order.layout_type)} style={{ fontSize: 11, margin: 0 }}>
-              {order.layout_type}
-            </Tag>
-          )}
-          {order.source && (
-            <Tag color={getColor(sourceOptions, order.source)} style={{ fontSize: 11, margin: 0 }}>
-              {order.source}
-            </Tag>
-          )}
-        </div>
-
-        {order.workers && order.workers.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
-            {order.workers.map((w) => (
-              <Tag key={w} color={getColor(workerColors, w)} style={{ fontSize: 10, margin: 0 }}>
-                {w}
-              </Tag>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          {canViewPrices && (
-            <Typography.Text strong style={{ fontSize: 13, color: "#1677ff" }}>
-              {order.total_price.toLocaleString()} ₽
-            </Typography.Text>
-          )}
-          {order.deadline && (
-            <Tooltip title={dayjs(order.deadline).format("DD.MM.YYYY")}>
-              <Space size={2}>
-                <ClockCircleOutlined style={{ fontSize: 11, color: dayjs(order.deadline).isBefore(dayjs()) ? "#ff4d4f" : "#8c8c8c" }} />
-                <Typography.Text type={dayjs(order.deadline).isBefore(dayjs()) ? "danger" : "secondary"} style={{ fontSize: 11 }}>
-                  {dayjs(order.deadline).format("DD.MM")}
-                </Typography.Text>
-              </Space>
-            </Tooltip>
-          )}
-        </div>
-        {order.items && order.items.length > 0 && (
-          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {order.items.map((item) => (
-              <Tooltip key={item.id} title={`${item.product_name || `#${item.product_id}`} × ${item.quantity}${item.product_unit ? " " + item.product_unit : ""}`}>
-                <Tag style={{ fontSize: 11, margin: 0, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {item.product_name || `#${item.product_id}`} × {item.quantity}{item.product_unit ? " " + item.product_unit : ""}
-                </Tag>
-              </Tooltip>
-            ))}
-          </div>
-        )}
-      </div>
-    );
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveOrder(null);
+    if (!over) return;
+    const overId = String(over.id);
+    if (overId.startsWith("column-")) {
+      const targetStatus = overId.replace("column-", "");
+      const orderId = Number(String(active.id).replace("order-", ""));
+      if (orderId && targetStatus) onMoveOrder(orderId, targetStatus);
+    }
   };
 
   return (
     <>
-      <div style={{ padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ padding: "8px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <RangePicker
           size="small"
           value={dateRange as [dayjs.Dayjs, dayjs.Dayjs] | null}
@@ -222,37 +210,46 @@ export default function KanbanBoard({ orders, onMoveOrder, onSelectOrder, design
           </Typography.Text>
         )}
       </div>
-      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 16 }}>
-      {MAIN_STATUSES.map((status) => {
-        const cfg = getStatusConfig(status, statusColors);
-        const items = grouped[status] || [];
-        const statusIdx = MAIN_STATUSES.indexOf(status);
-        return (
-          <div
-            key={status}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, status)}
-            style={{
-              minWidth: 240,
-              maxWidth: 280,
-              background: cfg.bg,
-              borderRadius: 12,
-              padding: 8,
-              flex: "0 0 auto",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", marginBottom: 8 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: cfg.color }} />
-              <Typography.Text strong style={{ fontSize: 13 }}>{cfg.label}</Typography.Text>
-              <Tag style={{ marginLeft: "auto", fontSize: 11 }}>{items.length}</Tag>
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 16, flexDirection: isMobile ? "column" : "row" }}>
+          {MAIN_STATUSES.map((status) => {
+            const cfg = getStatusConfig(status, statusColors);
+            const items = grouped[status] || [];
+            const statusIdx = MAIN_STATUSES.indexOf(status);
+            return (
+              <DroppableColumn key={status} status={status} cfg={cfg} items={items}>
+                {items.map((order) => (
+                  <DraggableCard
+                    key={order.id}
+                    order={order}
+                    status={status}
+                    showLeft={statusIdx > 0}
+                    showRight={statusIdx < MAIN_STATUSES.length - 1}
+                    onSelectOrder={onSelectOrder}
+                    moveLeft={moveLeft}
+                    moveRight={moveRight}
+                    canViewPrices={canViewPrices}
+                    statusColors={statusColors}
+                    designerColors={designerColors}
+                    workerColors={workerColors}
+                    layoutOptions={layoutOptions}
+                    sourceOptions={sourceOptions}
+                  />
+                ))}
+              </DroppableColumn>
+            );
+          })}
+        </div>
+        <DragOverlay>
+          {activeOrder ? (
+            <div style={{ background: "#fff", borderRadius: 8, padding: 12, border: "2px solid #1677ff", boxShadow: "0 4px 16px rgba(0,0,0,0.15)", maxWidth: 280, opacity: 0.9 }}>
+              <Typography.Text strong style={{ fontSize: 13 }} ellipsis>
+                {activeOrder.description || (activeOrder.items?.length ? activeOrder.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${activeOrder.id}`)}
+              </Typography.Text>
             </div>
-            {items.map((order) =>
-              renderCard(order, status, statusIdx > 0, statusIdx < MAIN_STATUSES.length - 1)
-            )}
-          </div>
-        );
-      })}
-    </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
     </>
   );
 }

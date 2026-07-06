@@ -94,7 +94,7 @@ export default function Dashboard() {
   };
 
   const { data: clients } = useQuery({ queryKey: ["clients"], queryFn: getClients });
-  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
+  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: getProducts });
   const { data: warehouse } = useQuery({ queryKey: ["warehouse"], queryFn: getWarehouseItems });
 

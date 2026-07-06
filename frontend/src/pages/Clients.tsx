@@ -40,7 +40,7 @@ export default function ClientsPage() {
 
   const { data: clients, isLoading } = useQuery({ queryKey: ["clients"], queryFn: getClients });
   const { data: allCompanyDetails } = useQuery({ queryKey: ["companyDetails"], queryFn: getCompanyDetails });
-  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
+  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
   const { data: settings } = useQuery({ queryKey: ["orderSettings"], queryFn: () => getOrderSettings() });
 
   const createMutation = useMutation({
@@ -91,11 +91,17 @@ export default function ClientsPage() {
 
   const toggleItemMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) => toggleItemCompleted(orderId, itemId),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      setOrderDetail((prev) => prev ? { ...prev, ...data } : null);
+    },
   });
   const printedItemMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) => toggleItemPrinted(orderId, itemId),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      setOrderDetail((prev) => prev ? { ...prev, ...data } : null);
+    },
   });
 
   const statusLabels: Record<string, string> = { new: "Новый", in_progress: "В работе", ready: "Готов", delivered: "Отдали" };

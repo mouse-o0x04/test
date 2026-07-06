@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CalculatorOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, HistoryOutlined, MinusCircleOutlined, PlusCircleOutlined, PlusOutlined, UnorderedListOutlined, PrinterOutlined, PrinterFilled, CheckSquareOutlined, SwapRightOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, HistoryOutlined, PlusOutlined, UnorderedListOutlined, PrinterOutlined, PrinterFilled, CheckSquareOutlined, SwapRightOutlined, PlusCircleOutlined } from "@ant-design/icons";
 import {
   Button,
   Checkbox,
@@ -6,6 +6,7 @@ import {
   Descriptions,
   Divider,
   Drawer,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -14,6 +15,7 @@ import {
   Progress,
   Select,
   Space,
+  Spin,
   Table,
   Timeline,
   Tag,
@@ -24,14 +26,11 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { useCallback, useMemo, useState } from "react";
-import CalculatorModal from "../components/CalculatorModal";
-import { createClient, getClients } from "../api/clients";
+import OrderForm from "../components/OrderForm";
 import { getOrderSettings } from "../api/orderSettings";
-import { getProducts } from "../api/products";
-import { getRawMaterials } from "../api/rawMaterials";
 import { runDisplayScript } from "../api/scripts";
-import { getUsers } from "../api/auth";
-import { createOrder, deleteOrder, getOrderHistory, getOrders, saveItemAsProduct, toggleItemCompleted, toggleItemPrinted, updateOrder, bulkDeleteOrders } from "../api/orders";
+import { deleteOrder, getOrderHistory, getOrders, saveItemAsProduct, setProcessingMethod, toggleItemCompleted, toggleItemPrinted, updateOrder, bulkDeleteOrders } from "../api/orders";
+import { getRawMaterials } from "../api/rawMaterials";
 import { getWarehouseItems } from "../api/warehouse";
 import ColumnSettings from "../components/ColumnSettings";
 import KanbanBoard from "../components/KanbanBoard";
@@ -170,7 +169,6 @@ export default function OrdersPage() {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Order | null>(null);
-  const [form] = Form.useForm();
   const [viewMode, setViewMode] = useViewMode("orders", "kanban");
   const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null);
   const { user, hasPermission } = useAuth();
@@ -179,20 +177,16 @@ export default function OrdersPage() {
   const colSettings = useColumnSettings("orders", ALL_ORDER_COLUMNS);
 
   const entityFilters = useEntityFilters("orders");
-  const [calcItemIndex, setCalcItemIndex] = useState<number | null>(null);
-  const [calcModalOpen, setCalcModalOpen] = useState(false);
-  const [quickClientOpen, setQuickClientOpen] = useState(false);
-  const [quickClientForm] = Form.useForm();
   const [editingStatusId, setEditingStatusId] = useState<number | null>(null);
   const [editingWorkersId, setEditingWorkersId] = useState<number | null>(null);
+  const [editingDesignerId, setEditingDesignerId] = useState<number | null>(null);
+  const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null);
+  const [editingSourceId, setEditingSourceId] = useState<number | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
-  const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
-  const { data: clients } = useQuery({ queryKey: ["clients"], queryFn: getClients });
-  const { data: products } = useQuery({ queryKey: ["products"], queryFn: getProducts });
+  const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
   const { data: rawMaterials } = useQuery({ queryKey: ["rawMaterials"], queryFn: getRawMaterials });
   const { data: warehouseItems } = useQuery({ queryKey: ["warehouse"], queryFn: getWarehouseItems });
-  const { data: users } = useQuery({ queryKey: ["users"], queryFn: getUsers });
 
   const { data: designerColors } = useQuery({ queryKey: ["orderSettings", "designer_color"], queryFn: () => getOrderSettings("designer_color") });
   const { data: workerColors } = useQuery({ queryKey: ["orderSettings", "worker_color"], queryFn: () => getOrderSettings("worker_color") });
@@ -209,34 +203,6 @@ export default function OrdersPage() {
   const getColor = (settings: OrderSettingsItem[] | undefined, name: string): string => {
     return settings?.find((s) => s.name === name)?.color || "#1677ff";
   };
-
-  const createMutation = useMutation({
-    mutationFn: async (data: OrderFormData) => {
-      return await createOrder(data);
-    },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); queryClient.invalidateQueries({ queryKey: ["warehouse"] }); queryClient.invalidateQueries({ queryKey: ["writeoffs"] }); message.success("Заказ создан"); setModalOpen(false); form.resetFields(); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка создания заказа"); },
-  });
-
-  const quickClientMutation = useMutation({
-    mutationFn: (data: { name: string; phone?: string; email?: string }) => createClient(data),
-    onSuccess: (newClient) => {
-      queryClient.invalidateQueries({ queryKey: ["clients"] });
-      form.setFieldsValue({ client_id: newClient.id });
-      setQuickClientOpen(false);
-      quickClientForm.resetFields();
-      message.success("Клиент создан");
-    },
-    onError: () => message.error("Ошибка создания клиента"),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: Partial<OrderFormData> }) => {
-      await updateOrder(id, data);
-    },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); queryClient.invalidateQueries({ queryKey: ["writeoffs"] }); message.success("Заказ обновлён"); setModalOpen(false); setEditing(null); form.resetFields(); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка обновления заказа"); },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: deleteOrder,
@@ -266,12 +232,43 @@ export default function OrdersPage() {
     onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
   });
 
+  const designerMutation = useMutation({
+    mutationFn: ({ id, designer }: { id: number; designer: string }) => updateOrder(id, { designer }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Дизайнер обновлён"); },
+    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+  });
+
+  const layoutMutation = useMutation({
+    mutationFn: ({ id, layout_type }: { id: number; layout_type: string }) => updateOrder(id, { layout_type }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Макет обновлён"); },
+    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+  });
+
+  const sourceMutation = useMutation({
+    mutationFn: ({ id, source }: { id: number; source: string }) => updateOrder(id, { source }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Где обновлено"); },
+    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+  });
+
+  const processingMethodMutation = useMutation({
+    mutationFn: ({ orderId, itemId, processingMethod }: { orderId: number; itemId: number; processingMethod: string }) => setProcessingMethod(orderId, itemId, processingMethod),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      setDetailOrder((prev) => prev ? { ...prev, ...data } : null);
+      message.success("Способ обработки обновлён");
+    },
+    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+  });
+
   const toggleItemMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) => toggleItemCompleted(orderId, itemId),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
-      setDetailOrder((prev) => prev ? { ...prev, items: data.items, progress: data.progress } : null);
+      setDetailOrder((prev) => prev ? { ...prev, ...data } : null);
       refetchHistory();
+    },
+    onError: (err: { response?: { data?: { detail?: string } } }) => {
+      message.error(err.response?.data?.detail || "Ошибка");
     },
   });
 
@@ -279,8 +276,11 @@ export default function OrdersPage() {
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) => toggleItemPrinted(orderId, itemId),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
-      setDetailOrder((prev) => prev ? { ...prev, items: data.items, progress: data.progress } : null);
+      setDetailOrder((prev) => prev ? { ...prev, ...data } : null);
       refetchHistory();
+    },
+    onError: (err: { response?: { data?: { detail?: string } } }) => {
+      message.error(err.response?.data?.detail || "Ошибка");
     },
   });
 
@@ -289,94 +289,19 @@ export default function OrdersPage() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      setDetailOrder((prev) => prev ? { ...prev, items: data.items, progress: data.progress } : null);
+      setDetailOrder((prev) => prev ? { ...prev, ...data } : null);
       message.success("Продукт сохранён в каталог");
     },
   });
 
   const openCreate = () => {
     setEditing(null);
-    form.resetFields();
-    form.setFieldsValue({ items: [{ product_id: undefined, quantity: 1 }], status: "new" });
     setModalOpen(true);
   };
 
   const openEdit = (order: Order) => {
     setEditing(order);
-    form.setFieldsValue({
-      client_id: order.client_id,
-      status: order.status,
-      description: order.description,
-      notes: order.notes,
-      deadline: order.deadline ? dayjs(order.deadline) : undefined,
-      items: order.items.map((i) => ({
-        product_id: i.product_id,
-        quantity: i.quantity,
-        unit_price: i.unit_price,
-        product_name: i.product_name,
-        product_unit: i.product_unit,
-        raw_material_id: i.raw_material_id,
-        raw_material_qty: i.raw_material_qty,
-        cut_width_mm: i.cut_width_mm,
-        cut_height_mm: i.cut_height_mm,
-        raw_materials: i.raw_materials || [],
-        is_custom: i.is_custom,
-        manual_writeoff_pending: i.manual_writeoff_pending,
-        manual_writeoff_raw_material_id: i.manual_writeoff_raw_material_id,
-        manual_writeoff_cut_width_mm: i.manual_writeoff_cut_width_mm,
-        manual_writeoff_cut_height_mm: i.manual_writeoff_cut_height_mm,
-        manual_writeoff_quantity: i.manual_writeoff_quantity,
-      })),
-      designer: order.designer,
-      workers: order.workers,
-      layout_type: order.layout_type,
-      path: order.path,
-      source: order.source,
-    });
     setModalOpen(true);
-  };
-
-  const onFinish = (values: Record<string, unknown>) => {
-    const v = values;
-    const payload: OrderFormData = {
-      client_id: v.client_id as number,
-      status: v.status as string,
-      description: (v.description as string) || undefined,
-      notes: (v.notes as string) || undefined,
-      deadline: v.deadline ? dayjs(v.deadline as string | number | Date).toISOString() : undefined,
-      items: (v.items as Array<{ product_id?: number; product_name?: string; product_unit?: string; unit_price?: number; raw_material_id?: number; raw_material_qty?: number; cut_width_mm?: number; cut_height_mm?: number; raw_materials?: { raw_material_id: number; cut_width_mm?: number; cut_height_mm?: number }[]; quantity: number; manual_writeoff_pending?: boolean; manual_writeoff_raw_material_id?: number; manual_writeoff_cut_width_mm?: number; manual_writeoff_cut_height_mm?: number; manual_writeoff_quantity?: number }> || []).map((i) => ({
-        product_id: i.product_id || undefined,
-        product_name: i.product_name || undefined,
-        product_unit: i.product_unit || undefined,
-        unit_price: i.unit_price || undefined,
-        raw_material_id: i.raw_material_id || undefined,
-        raw_material_qty: i.raw_material_qty || undefined,
-        cut_width_mm: i.cut_width_mm || undefined,
-        cut_height_mm: i.cut_height_mm || undefined,
-        raw_materials: (i.raw_materials || []).map((rm) => ({
-          raw_material_id: rm.raw_material_id,
-          cut_width_mm: rm.cut_width_mm || undefined,
-          cut_height_mm: rm.cut_height_mm || undefined,
-        })),
-        quantity: i.quantity,
-        manual_writeoff_pending: i.manual_writeoff_pending || false,
-        manual_writeoff_raw_material_id: i.manual_writeoff_raw_material_id || undefined,
-        manual_writeoff_cut_width_mm: i.manual_writeoff_cut_width_mm || undefined,
-        manual_writeoff_cut_height_mm: i.manual_writeoff_cut_height_mm || undefined,
-        manual_writeoff_quantity: i.manual_writeoff_quantity || undefined,
-      })),
-      designer: (v.designer as string) || undefined,
-      workers: (v.workers as string[]) || [],
-      layout_type: (v.layout_type as string) || undefined,
-      path: (v.path as string) || undefined,
-      source: (v.source as string) || undefined,
-    };
-
-    if (editing) {
-      updateMutation.mutate({ id: editing.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
-    }
   };
 
   const handleMoveOrder = (orderId: number, newStatus: string) => {
@@ -474,6 +399,7 @@ export default function OrdersPage() {
     const saveDesignerFilter = (value: string[]) => entityFilters.updateFilters({ ...entityFilters.filters, designer: value.length ? value : undefined });
     const saveWorkersFilter = (value: string[]) => entityFilters.updateFilters({ ...entityFilters.filters, workers: value.length ? value : undefined });
     const saveSourceFilter = (value: string[]) => entityFilters.updateFilters({ ...entityFilters.filters, source: value.length ? value : undefined });
+    const saveLayoutFilter = (value: string[]) => entityFilters.updateFilters({ ...entityFilters.filters, layout: value.length ? value : undefined });
 
     const selectFilterDropdown = (options: { text: string; value: string | number | boolean }[], onSave: (value: string[]) => void) => ({
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: React.Key[]) => void; selectedKeys: React.Key[]; confirm: () => void; clearFilters?: () => void }) => (
@@ -536,7 +462,41 @@ export default function OrdersPage() {
         title: "Дизайнер", dataIndex: "designer", key: "designer",
         filters: (designerColors ?? []).map((d) => ({ text: d.name, value: d.name })),
         ...selectFilterDropdown((designerColors ?? []).map((d) => ({ text: d.name, value: d.name })), saveDesignerFilter),
-        render: (v: string) => v ? <Tag color={getColor(designerColors, v)}>{v}</Tag> : "—",
+        render: (v: string, record: OrderRow) => {
+          if (editingDesignerId === record.id) {
+            return (
+              <div onClick={(e) => e.stopPropagation()}>
+                <Select
+                  value={v || undefined}
+                  size="small"
+                  style={{ width: 180 }}
+                  options={(designerColors ?? []).map((d) => ({ label: d.name, value: d.name }))}
+                  autoFocus
+                  open
+                  onChange={(val) => {
+                    designerMutation.mutate({ id: record.id, designer: val || "" });
+                    setEditingDesignerId(null);
+                  }}
+                  onBlur={() => setEditingDesignerId(null)}
+                  tagRender={({ label, closable, onClose }) => (
+                    <Tag color={getColor(designerColors, label as string)} closable={closable} onClose={onClose} style={{ marginRight: 3 }}>
+                      {label}
+                    </Tag>
+                  )}
+                />
+              </div>
+            );
+          }
+          return v ? (
+            <Tag color={getColor(designerColors, v)} style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setEditingDesignerId(record.id); }}>
+              {v}
+            </Tag>
+          ) : (
+            <Tag style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setEditingDesignerId(record.id); }}>
+              + Добавить
+            </Tag>
+          );
+        },
         filteredValue: (entityFilters.filters["designer"] as string[]) ?? null,
       },
       {
@@ -585,18 +545,85 @@ export default function OrdersPage() {
         },
         filteredValue: (entityFilters.filters["workers"] as string[]) ?? null,
       },
-      { title: "Макет", dataIndex: "layout_type", key: "layout_type", render: (v: string) => v ? <Tag color={getColor(layoutOptions, v)}>{v}</Tag> : "—" },
+      {
+        title: "Макет", dataIndex: "layout_type", key: "layout_type",
+        filters: (layoutOptions ?? []).map((l) => ({ text: l.name, value: l.name })),
+        ...selectFilterDropdown((layoutOptions ?? []).map((l) => ({ text: l.name, value: l.name })), saveLayoutFilter),
+        render: (v: string, record: OrderRow) => {
+          if (editingLayoutId === record.id) {
+            return (
+              <div onClick={(e) => e.stopPropagation()}>
+                <Select
+                  allowClear
+                  value={v || undefined}
+                  size="small"
+                  style={{ width: 160 }}
+                  options={(layoutOptions ?? []).map((l) => ({ label: l.name, value: l.name }))}
+                  autoFocus
+                  open
+                  onChange={(val) => {
+                    layoutMutation.mutate({ id: record.id, layout_type: val || "" });
+                    setEditingLayoutId(null);
+                  }}
+                  onBlur={() => setEditingLayoutId(null)}
+                />
+              </div>
+            );
+          }
+          const displayName = v || layoutOptions?.[0]?.name || "";
+          const color = getColor(layoutOptions, displayName);
+          return (
+            <span
+              style={{ display: "inline-block", padding: "1px 8px", borderRadius: 4, fontSize: 12, cursor: "pointer", background: (color || "#1677ff") + "18", color: color || "#1677ff", border: `1px solid ${color || "#1677ff"}40`, lineHeight: "22px" }}
+              onClick={(e) => { e.stopPropagation(); setEditingLayoutId(record.id); }}
+            >
+              {displayName || "+ Добавить"}
+            </span>
+          );
+        },
+        filteredValue: (entityFilters.filters["layout"] as string[]) ?? null,
+      },
       { title: "Путь", dataIndex: "path", key: "path", render: (v: string) => renderPathCell(v) },
       {
         title: "Где", dataIndex: "source", key: "source",
         filters: (sourceOptions ?? []).map((s) => ({ text: s.name, value: s.name })),
         ...selectFilterDropdown((sourceOptions ?? []).map((s) => ({ text: s.name, value: s.name })), saveSourceFilter),
-        render: (v: string) => v ? <Tag color={getColor(sourceOptions, v)}>{v}</Tag> : "—",
+        render: (v: string, record: OrderRow) => {
+          if (editingSourceId === record.id) {
+            return (
+              <div onClick={(e) => e.stopPropagation()}>
+                <Select
+                  allowClear
+                  value={v || undefined}
+                  size="small"
+                  style={{ width: 160 }}
+                  options={(sourceOptions ?? []).map((s) => ({ label: s.name, value: s.name }))}
+                  autoFocus
+                  open
+                  onChange={(val) => {
+                    sourceMutation.mutate({ id: record.id, source: val || "" });
+                    setEditingSourceId(null);
+                  }}
+                  onBlur={() => setEditingSourceId(null)}
+                />
+              </div>
+            );
+          }
+          const color = getColor(sourceOptions, v);
+          return (
+            <span
+              style={{ display: "inline-block", padding: "1px 8px", borderRadius: 4, fontSize: 12, cursor: "pointer", background: color + "18", color, border: `1px solid ${color}40`, lineHeight: "22px" }}
+              onClick={(e) => { e.stopPropagation(); setEditingSourceId(record.id); }}
+            >
+              {v || "+ Добавить"}
+            </span>
+          );
+        },
         filteredValue: (entityFilters.filters["source"] as string[]) ?? null,
       },
     ];
     return cols.filter(Boolean) as typeof cols[number][];
-  }, [entityFilters.filters, entityFilters.sortField, entityFilters.sortDirection, clientNames, canViewPrices, designerColors, workerColors, layoutOptions, sourceOptions, statusTagColors, renderDescription, renderPathCell]);
+  }, [entityFilters.filters, entityFilters.sortField, entityFilters.sortDirection, clientNames, canViewPrices, designerColors, workerColors, layoutOptions, sourceOptions, statusTagColors, renderDescription, renderPathCell, editingDesignerId, editingLayoutId, editingSourceId]);
 
   const actionColumn = {
     title: "Действия", key: "actions", width: 160,
@@ -611,27 +638,20 @@ export default function OrdersPage() {
   };
 
   const columns = useMemo(() => {
-    const ordered = colSettings.orderedVisibleKeys
+    const colMap = new Map<string, typeof baseColumns[number]>();
+    for (const col of baseColumns) {
+      colMap.set(String(col.key), col);
+    }
+    colMap.set("actions", actionColumn);
+    const keys = colSettings.orderedVisibleKeys.map(String);
+    const ordered = keys
       .map((k) => {
-        if (k === "id") return baseColumns[0];
-        if (k === "client") return baseColumns[1];
-        if (k === "description") return baseColumns[2];
-        if (k === "total_price") return canViewPrices ? baseColumns[3] : null;
-        if (k === "status") return baseColumns[4];
-        if (k === "deadline") return baseColumns[5];
-        if (k === "designer") return baseColumns[6];
-        if (k === "workers") return baseColumns[7];
-        if (k === "layout") return baseColumns[8];
-        if (k === "path") return baseColumns[9];
-        if (k === "source") return baseColumns[10];
-        if (k === "actions") return actionColumn;
-        return null;
+        if (k === "total_price" && !canViewPrices) return null;
+        return colMap.get(k) || null;
       })
       .filter(Boolean) as typeof baseColumns[number][];
     return ordered;
   }, [colSettings.orderedVisibleKeys, baseColumns, canViewPrices, actionColumn]);
-
-  const activeUsers = (users ?? []).filter((u) => u.is_active);
 
   return (
     <>
@@ -698,295 +718,30 @@ export default function OrdersPage() {
           })}
         />
       ) : (
-        <KanbanBoard
-          orders={filteredData}
-          onMoveOrder={handleMoveOrder}
-          onSelectOrder={(order) => setDetailOrder(order)}
-          designerColors={designerColors}
-          workerColors={workerColors}
-          layoutOptions={layoutOptions}
-          sourceOptions={sourceOptions}
-          statusColors={statusColors}
-        />
+        <Spin spinning={isLoading}>
+          {filteredData.length === 0 && !isLoading ? (
+            <Empty description="Нет заказов" style={{ margin: "40px 0" }} />
+          ) : (
+            <KanbanBoard
+              orders={filteredData}
+              onMoveOrder={handleMoveOrder}
+              onSelectOrder={(order) => setDetailOrder(order)}
+              designerColors={designerColors}
+              workerColors={workerColors}
+              layoutOptions={layoutOptions}
+              sourceOptions={sourceOptions}
+              statusColors={statusColors}
+            />
+          )}
+        </Spin>
       )}
 
-      <Modal
-        title={editing ? "Редактировать заказ" : "Новый заказ"}
+      <OrderForm
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); setEditing(null); }}
-        onOk={() => form.validateFields().then(onFinish).catch(() => {})}
-        confirmLoading={createMutation.isPending || updateMutation.isPending}
-        width={680}
-      >
-        <Form form={form} layout="vertical" onFinish={onFinish}>
-          <Form.Item name="client_id" label="Клиент" rules={[{ required: true }]}>
-            <Select showSearch optionFilterProp="label">
-              {(clients ?? []).map((c) => (<Select.Option key={c.id} value={c.id} label={c.name}>{c.name} ({c.email})</Select.Option>))}
-            </Select>
-          </Form.Item>
-
-          {!quickClientOpen ? (
-            <div style={{ marginTop: -12, marginBottom: 12 }}>
-              <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => setQuickClientOpen(true)} style={{ padding: 0 }}>
-                Новый клиент
-              </Button>
-            </div>
-          ) : (
-            <div style={{ border: "1px solid #d9d9d9", borderRadius: 6, padding: 12, marginBottom: 16, background: "#fafafa" }}>
-              <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>Новый клиент</Typography.Text>
-              <Form form={quickClientForm} layout="vertical" size="small">
-                <Form.Item name="name" label="Имя" rules={[{ required: true, message: "Введите имя клиента" }]} style={{ marginBottom: 8 }}>
-                  <Input placeholder="Имя клиента" />
-                </Form.Item>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <Form.Item name="phone" label="Телефон" style={{ flex: 1, marginBottom: 8 }}>
-                    <Input placeholder="+7 (999) 123-45-67" />
-                  </Form.Item>
-                  <Form.Item name="email" label="Email" style={{ flex: 1, marginBottom: 8 }}>
-                    <Input placeholder="client@example.com" />
-                  </Form.Item>
-                </div>
-                <Space>
-                  <Button size="small" onClick={() => { setQuickClientOpen(false); quickClientForm.resetFields(); }}>Отмена</Button>
-                  <Button type="primary" size="small" onClick={() => {
-                    quickClientForm.validateFields().then((values) => {
-                      quickClientMutation.mutate(values);
-                    });
-                  }} loading={quickClientMutation.isPending}>
-                    Создать
-                  </Button>
-                </Space>
-              </Form>
-            </div>
-          )}
-
-          <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>Продукты</Typography.Text>
-          <Form.List name="items" rules={[{ validator: async (_, value) => { if (!value || value.length < 1) return Promise.reject(new Error("Добавьте хотя бы один продукт")); } }]}>
-            {(fields, { add, remove }, { errors }) => (
-              <>
-                {fields.map((field, index) => (
-                  <div key={field.key} style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "flex-start", flexDirection: "column" }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", width: "100%" }}>
-                      <Form.Item
-                        name={[field.name, "product_id"]}
-                        style={{ flex: 1, marginBottom: 0 }}
-                      >
-                        <Select showSearch optionFilterProp="label" placeholder="Продукт из каталога" allowClear>
-                          {(products ?? []).map((p) => (<Select.Option key={p.id} value={p.id} label={p.name}>{p.name}{canViewPrices ? ` — ${p.unit_price} ₽` : ""} / {{ piece: "шт.", sheet: "лист", m2: "м²", roll: "рулон", set: "комплект" }[p.unit_type] || p.unit_type}</Select.Option>))}
-                        </Select>
-                      </Form.Item>
-                      <Form.Item
-                        name={[field.name, "quantity"]}
-                        rules={[{ required: true, message: "Кол-во" }]}
-                        style={{ width: 100, marginBottom: 0 }}
-                      >
-                        <InputNumber min={1} placeholder="Кол-во" style={{ width: "100%" }} />
-                      </Form.Item>
-                      {fields.length > 1 && (
-                        <MinusCircleOutlined
-                          style={{ marginTop: 8, color: "#ff4d4f", fontSize: 18, cursor: "pointer" }}
-                          onClick={() => remove(field.name)}
-                        />
-                      )}
-                    </div>
-                    {!form.getFieldInstance(["items", field.name, "product_id"])?.getValue?.() && (
-                      <div style={{ display: "flex", gap: 8, width: "100%", background: "#fafafa", padding: "8px 8px 0", borderRadius: 4, flexDirection: "column" }}>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <Form.Item name={[field.name, "product_name"]} style={{ flex: 1, marginBottom: 8 }}>
-                            <Input placeholder="Название (произвольная позиция)" />
-                          </Form.Item>
-                          {canViewPrices && (
-                            <Form.Item name={[field.name, "unit_price"]} style={{ width: 160, marginBottom: 8 }}>
-                              <InputNumber min={0} placeholder="Цена ₽" style={{ width: "100%" }} addonAfter={<CalculatorOutlined style={{ cursor: "pointer", color: "#1677ff" }} onClick={(e) => { e.stopPropagation(); setCalcItemIndex(field.name); setCalcModalOpen(true); }} />} />
-                            </Form.Item>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <Form.Item name={[field.name, "raw_material_id"]} style={{ flex: 1, marginBottom: 8 }}>
-                            <Select allowClear placeholder="Сырьё (необязательно)" showSearch optionFilterProp="label">
-                              {(rawMaterials ?? []).map((rm) => (
-                                <Select.Option key={rm.id} value={rm.id} label={rm.name}>
-                                  {rm.name} {rm.roll_width_m ? `(рулон ${rm.roll_width_m * 1000}мм)` : rm.width_mm && rm.height_mm ? `(${rm.width_mm}×${rm.height_mm})` : ""}
-                                </Select.Option>
-                              ))}
-                            </Select>
-                          </Form.Item>
-                        </div>
-                        <Form.Item noStyle shouldUpdate>
-                          {() => {
-                            const items = form.getFieldValue("items") || [];
-                            const item = items[field.name] || {};
-                            if (!item.raw_material_id) return null;
-                            const rm = (rawMaterials ?? []).find((r) => r.id === item.raw_material_id);
-                            return (
-                              <div style={{ display: "flex", gap: 8, background: "#f6ffed", padding: "8px 8px 0", borderRadius: 4, flexDirection: "column" }}>
-                                <div style={{ display: "flex", gap: 8 }}>
-                                  <Form.Item name={[field.name, "cut_width_mm"]} style={{ flex: 1, marginBottom: 8 }}>
-                                    <InputNumber min={0} step={1} placeholder={rm?.roll_width_m ? `Ширина отреза, мм (рулон ${rm.roll_width_m * 1000} мм)` : "Ширина отреза, мм"} style={{ width: "100%" }} />
-                                  </Form.Item>
-                                  <Form.Item name={[field.name, "cut_height_mm"]} style={{ flex: 1, marginBottom: 8 }}>
-                                    <InputNumber min={0} step={1} placeholder={rm?.roll_length_m ? `Высота отреза, мм (рулон ${rm.roll_length_m * 1000} мм)` : "Высота отреза, мм"} style={{ width: "100%" }} />
-                                  </Form.Item>
-                                </div>
-                                <div style={{ fontSize: 12, color: "#666", marginTop: -4, marginBottom: 8 }}>
-                                  Расход рассчитается автоматически по размерам отреза
-                                </div>
-                              </div>
-                            );
-                          }}
-                        </Form.Item>
-                        <Divider orientation="left" orientationMargin={0} style={{ fontSize: 11, marginTop: 4, marginBottom: 8 }}>Доп. сырьё</Divider>
-                        <Form.List name={[field.name, "raw_materials"]}>
-                          {(rmFields, { add: addRm, remove: removeRm }) => (
-                            <>
-                              {rmFields.map((rmField) => (
-                                <div key={rmField.key} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
-                                  <Form.Item {...rmField} name={[rmField.name, "raw_material_id"]} noStyle rules={[{ required: true }]}>
-                                    <Select placeholder="Материал" showSearch optionFilterProp="label" style={{ flex: 1 }}>
-                                      {(rawMaterials ?? []).map((rm) => (
-                                        <Select.Option key={rm.id} value={rm.id} label={rm.name}>
-                                          {rm.name} {rm.roll_width_m ? `(рулон ${rm.roll_width_m * 1000}мм)` : rm.width_mm && rm.height_mm ? `(${rm.width_mm}×${rm.height_mm})` : ""}
-                                        </Select.Option>
-                                      ))}
-                                    </Select>
-                                  </Form.Item>
-                                  <Form.Item {...rmField} name={[rmField.name, "cut_width_mm"]} noStyle>
-                                    <InputNumber min={0} step={1} placeholder="Ширина, мм" style={{ width: 120 }} />
-                                  </Form.Item>
-                                  <Form.Item {...rmField} name={[rmField.name, "cut_height_mm"]} noStyle>
-                                    <InputNumber min={0} step={1} placeholder="Высота, мм" style={{ width: 120 }} />
-                                  </Form.Item>
-                                  <MinusCircleOutlined style={{ color: "#ff4d4f", cursor: "pointer" }} onClick={() => removeRm(rmField.name)} />
-                                </div>
-                              ))}
-                              <Button type="dashed" size="small" onClick={() => addRm({})} block icon={<PlusOutlined />} style={{ marginBottom: 8 }}>
-                                Добавить материал
-                              </Button>
-                            </>
-                          )}
-                        </Form.List>
-                        <Divider orientation="left" orientationMargin={0} style={{ fontSize: 11, marginTop: 4, marginBottom: 8 }}>Ручное списание</Divider>
-                        <Form.Item name={[field.name, "manual_writeoff_pending"]} valuePropName="checked" style={{ marginBottom: 8 }}>
-                          <Checkbox>Списать со склада вручную</Checkbox>
-                        </Form.Item>
-                        <Form.Item noStyle shouldUpdate>
-                          {() => {
-                            const items = form.getFieldValue("items") || [];
-                            const item = items[field.name] || {};
-                            if (!item.manual_writeoff_pending) return null;
-                            return (
-                              <div style={{ display: "flex", gap: 8, background: "#fff7e6", padding: "8px 8px 0", borderRadius: 4, flexDirection: "column", border: "1px solid #ffd591" }}>
-                                <div style={{ display: "flex", gap: 8 }}>
-                                  <Form.Item name={[field.name, "manual_writeoff_raw_material_id"]} style={{ flex: 1, marginBottom: 8 }} rules={[{ required: true, message: "Выберите сырьё" }]}>
-                                    <Select allowClear placeholder="Сырьё для списания" showSearch optionFilterProp="label">
-                                      {(rawMaterials ?? []).map((rm) => (
-                                        <Select.Option key={rm.id} value={rm.id} label={rm.name}>
-                                          {rm.name} {rm.roll_width_m ? `(рулон ${rm.roll_width_m * 1000}мм)` : rm.width_mm && rm.height_mm ? `(${rm.width_mm}×${rm.height_mm})` : ""}
-                                        </Select.Option>
-                                      ))}
-                                    </Select>
-                                  </Form.Item>
-                                </div>
-                                <div style={{ display: "flex", gap: 8 }}>
-                                  <Form.Item name={[field.name, "manual_writeoff_cut_width_mm"]} style={{ flex: 1, marginBottom: 8 }}>
-                                    <InputNumber min={0} step={1} placeholder="Ширина отреза, мм" style={{ width: "100%" }} />
-                                  </Form.Item>
-                                  <Form.Item name={[field.name, "manual_writeoff_cut_height_mm"]} style={{ flex: 1, marginBottom: 8 }}>
-                                    <InputNumber min={0} step={1} placeholder="Высота отреза, мм" style={{ width: "100%" }} />
-                                  </Form.Item>
-                                  <Form.Item name={[field.name, "manual_writeoff_quantity"]} style={{ width: 120, marginBottom: 8 }}>
-                                    <InputNumber min={0} step={0.1} placeholder="Кол-во" style={{ width: "100%" }} />
-                                  </Form.Item>
-                                </div>
-                                <div style={{ fontSize: 12, color: "#666", marginTop: -4, marginBottom: 8 }}>
-                                  Расход рассчитается автоматически при подтверждении списания на складе
-                                </div>
-                              </div>
-                            );
-                          }}
-                        </Form.Item>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <Form.Item>
-                  <Button type="dashed" onClick={() => add({ product_id: undefined, quantity: 1 })} block icon={<PlusOutlined />}>
-                    Добавить продукт
-                  </Button>
-                  <Form.ErrorList errors={errors} />
-                </Form.Item>
-              </>
-            )}
-          </Form.List>
-
-          <Form.Item name="status" label="Статус">
-            <Select>{ORDER_STATUSES.map((s) => (<Select.Option key={s} value={s}>{statusLabels[s] || s}</Select.Option>))}</Select>
-          </Form.Item>
-          <Form.Item name="description" label="Описание заказа">
-            <Input.TextArea rows={2} placeholder="Описание (автоиз списка продуктов, если пусто)" />
-          </Form.Item>
-          <Form.Item name="deadline" label="Дедлайн"><DatePicker style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="notes" label="Примечания"><Input.TextArea rows={2} /></Form.Item>
-
-          {canEditOrders && (
-            <>
-              <Divider style={{ margin: "12px 0" }} />
-              <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>Дополнительные поля</Typography.Text>
-
-              <Form.Item name="designer" label="Дизайнер">
-                <Select allowClear showSearch optionFilterProp="label" placeholder="Выберите дизайнера">
-                  {activeUsers.map((u) => (
-                    <Select.Option key={u.id} value={u.username} label={u.full_name || u.username}>
-                      {u.full_name || u.username} ({u.username})
-                    </Select.Option>
-                  ))}
-                </Select>
-              </Form.Item>
-
-              <Form.Item name="workers" label="Работники">
-                <Select mode="multiple" allowClear showSearch optionFilterProp="label" placeholder="Выберите работников">
-                  {activeUsers.map((u) => (
-                    <Select.Option key={u.id} value={u.username} label={u.full_name || u.username}>
-                      {u.full_name || u.username} ({u.username})
-                    </Select.Option>
-                  ))}
-                </Select>
-              </Form.Item>
-
-              <Form.Item name="layout_type" label="Макет">
-                <Select allowClear placeholder="Выберите макет">
-                  {(layoutOptions ?? []).map((opt) => (
-                    <Select.Option key={opt.id} value={opt.name} label={opt.name}>
-                      <Space>
-                        <span style={{ width: 10, height: 10, borderRadius: 2, background: opt.color, display: "inline-block" }} />
-                        {opt.name}
-                      </Space>
-                    </Select.Option>
-                  ))}
-                </Select>
-              </Form.Item>
-
-              <Form.Item name="path" label="Путь к файлам">
-                <Input.TextArea rows={2} placeholder="\\192.168.1.150\buffer\заказчик номер 1" />
-              </Form.Item>
-
-              <Form.Item name="source" label="Где (Откуда заказчик)">
-                <Select allowClear placeholder="Выберите источник">
-                  {(sourceOptions ?? []).map((opt) => (
-                    <Select.Option key={opt.id} value={opt.name} label={opt.name}>
-                      <Space>
-                        <span style={{ width: 10, height: 10, borderRadius: 2, background: opt.color, display: "inline-block" }} />
-                        {opt.name}
-                      </Space>
-                    </Select.Option>
-                  ))}
-                </Select>
-              </Form.Item>
-            </>
-          )}
-
-        </Form>
-      </Modal>
+        editing={editing}
+        onClose={() => { setModalOpen(false); setEditing(null); }}
+        onSuccess={() => {}}
+      />
 
       <Drawer
         title={`Заказ #${detailOrder?.id || ""}`}
@@ -1082,12 +837,18 @@ export default function OrdersPage() {
               columns={[
                 {
                   title: "", key: "check", width: 40,
-                  render: (_: unknown, r: OrderItem) => (
-                    <Checkbox
-                      checked={r.is_completed}
-                      onChange={() => toggleItemMutation.mutate({ orderId: detailOrder.id, itemId: r.id })}
-                    />
-                  ),
+                  render: (_: unknown, r: OrderItem) => {
+                    const needsProcessing = !!(r.is_custom && (r.raw_material_id || (r.raw_materials && r.raw_materials.length > 0)) && !r.processing_method);
+                    return (
+                      <Tooltip title={needsProcessing ? "Сначала выберите способ обработки" : ""}>
+                        <Checkbox
+                          checked={r.is_completed}
+                          disabled={needsProcessing}
+                          onChange={() => toggleItemMutation.mutate({ orderId: detailOrder.id, itemId: r.id })}
+                        />
+                      </Tooltip>
+                    );
+                  },
                 },
                 {
                   title: <PrinterOutlined />, key: "printed", width: 40,
@@ -1104,35 +865,53 @@ export default function OrdersPage() {
                 {
                   title: "Продукт", dataIndex: "product_name", width: 280, ellipsis: true,
                   render: (v: string, r: OrderItem) => (
-                    <Space size={4}>
-                      <Typography.Text delete={r.is_completed} type={r.is_completed ? "secondary" : undefined} ellipsis style={{ maxWidth: 180 }}>
-                        {v || `#${r.product_id}`}
-                      </Typography.Text>
-                      {r.is_printed && !r.is_completed && (
-                        <Tag color="orange" style={{ margin: 0, fontSize: 11, flexShrink: 0 }}>Напечатан</Tag>
+                    <div>
+                      <Space size={4}>
+                        <Typography.Text delete={r.is_completed} type={r.is_completed ? "secondary" : undefined} ellipsis style={{ maxWidth: 180 }}>
+                          {v || `#${r.product_id}`}
+                        </Typography.Text>
+                        {r.is_printed && !r.is_completed && (
+                          <Tag color="orange" style={{ margin: 0, fontSize: 11, flexShrink: 0 }}>Напечатан</Tag>
+                        )}
+                        {r.is_custom && (
+                          <Tooltip title="Сохранить как продукт в каталоге">
+                            <Button type="link" size="small" style={{ margin: 0, padding: 0, fontSize: 11 }} onClick={() => saveAsProductMutation.mutate({ orderId: detailOrder.id, itemId: r.id })}>
+                              в каталог
+                            </Button>
+                          </Tooltip>
+                        )}
+                        {r.is_custom && r.raw_materials && r.raw_materials.length > 0 && (
+                          <Tooltip title={r.raw_materials.map((rm) => `${rm.raw_material_name || `#${rm.raw_material_id}`}: ${rm.cut_width_mm}×${rm.cut_height_mm}мм, ${rm.raw_material_qty} ед.`).join("\n")}>
+                            <Tag style={{ margin: 0, fontSize: 10, cursor: "default" }}>
+                              {r.raw_materials.length} материал(а)
+                            </Tag>
+                          </Tooltip>
+                        )}
+                        {r.is_custom && r.raw_material_id && (!r.raw_materials || r.raw_materials.length === 0) && r.cut_width_mm && r.cut_height_mm && (
+                          <Tooltip title={`Сырьё: ${r.raw_material_qty} ед.\nОтрез: ${r.cut_width_mm}×${r.cut_height_mm} мм`}>
+                            <Tag style={{ margin: 0, fontSize: 10, cursor: "default" }}>
+                              {r.cut_width_mm}×{r.cut_height_mm}
+                            </Tag>
+                          </Tooltip>
+                        )}
+                      </Space>
+                      {r.is_custom && (r.raw_material_id || (r.raw_materials && r.raw_materials.length > 0)) && (
+                        <div style={{ marginTop: 4 }}>
+                          <Select
+                            value={r.processing_method || undefined}
+                            placeholder="Способ обработки"
+                            size="small"
+                            style={{ width: 160 }}
+                            allowClear
+                            onChange={(val) => processingMethodMutation.mutate({ orderId: detailOrder.id, itemId: r.id, processingMethod: val || "" })}
+                          >
+                            <Select.Option value="Фреза">Фреза</Select.Option>
+                            <Select.Option value="Лазер">Лазер</Select.Option>
+                            <Select.Option value="Ручная резка">Ручная резка</Select.Option>
+                          </Select>
+                        </div>
                       )}
-                      {r.is_custom && (
-                        <Tooltip title="Сохранить как продукт в каталоге">
-                          <Button type="link" size="small" style={{ margin: 0, padding: 0, fontSize: 11 }} onClick={() => saveAsProductMutation.mutate({ orderId: detailOrder.id, itemId: r.id })}>
-                            в каталог
-                          </Button>
-                        </Tooltip>
-                      )}
-                      {r.is_custom && r.raw_materials && r.raw_materials.length > 0 && (
-                        <Tooltip title={r.raw_materials.map((rm) => `${rm.raw_material_name || `#${rm.raw_material_id}`}: ${rm.cut_width_mm}×${rm.cut_height_mm}мм, ${rm.raw_material_qty} ед.`).join("\n")}>
-                          <Tag style={{ margin: 0, fontSize: 10, cursor: "default" }}>
-                            {r.raw_materials.length} материал(а)
-                          </Tag>
-                        </Tooltip>
-                      )}
-                      {r.is_custom && r.raw_material_id && (!r.raw_materials || r.raw_materials.length === 0) && r.cut_width_mm && r.cut_height_mm && (
-                        <Tooltip title={`Сырьё: ${r.raw_material_qty} ед.\nОтрез: ${r.cut_width_mm}×${r.cut_height_mm} мм`}>
-                          <Tag style={{ margin: 0, fontSize: 10, cursor: "default" }}>
-                            {r.cut_width_mm}×{r.cut_height_mm}
-                          </Tag>
-                        </Tooltip>
-                      )}
-                    </Space>
+                    </div>
                   ),
                 },
                 { title: "Кол-во", dataIndex: "quantity", width: 80 },
@@ -1263,24 +1042,6 @@ export default function OrdersPage() {
           </>
         )}
       </Drawer>
-      <CalculatorModal
-        open={calcModalOpen}
-        onClose={() => { setCalcModalOpen(false); setCalcItemIndex(null); }}
-        onApply={(price, quantity) => {
-          if (calcItemIndex !== null) {
-            form.setFieldsValue({
-              items: {
-                [calcItemIndex]: {
-                  unit_price: Math.round(price * 100) / 100,
-                  ...(quantity > 0 ? { quantity } : {}),
-                },
-              },
-            });
-          }
-          setCalcModalOpen(false);
-          setCalcItemIndex(null);
-        }}
-      />
     </>
   );
 }

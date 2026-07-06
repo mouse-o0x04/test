@@ -26,6 +26,7 @@ import { useState } from "react";
 import { getProducts } from "../api/products";
 import { getRawMaterials } from "../api/rawMaterials";
 import { getScripts, runDisplayScript } from "../api/scripts";
+import { getOffcuts, createOffcut, deleteOffcut, type Offcut } from "../api/offcuts";
 import { createWriteoff, getWriteoffs, reverseWriteoff } from "../api/writeoffs";
 import AuditLogDrawer from "../components/AuditLogDrawer";
 import {
@@ -47,6 +48,35 @@ import { toSortOrder } from "../utils/sort";
 type TabMode = "products" | "raw_materials";
 
 const unitTypeLabels: Record<string, string> = { piece: "шт.", sheet: "лист", m2: "м²", roll: "рулон", set: "комплект" };
+
+function SheetMaterialDisplay({ record, isLow, unit }: { record: WarehouseItem; isLow: boolean; unit: string }) {
+  const available = record.quantity - (record.defective_quantity || 0);
+  const scriptName = record.display_format_script;
+  const scriptData = { totalQuantity: available, width_mm: 0, height_mm: 0, minQuantity: record.min_quantity };
+  const scriptResult = useDisplayFormat(scriptName, scriptData);
+
+  if (scriptResult) {
+    return (
+      <Space direction="vertical" size={0}>
+        <Space>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>{scriptResult.main}</span>
+          {isLow && <Tag icon={<ExclamationCircleOutlined />} color="warning">мало</Tag>}
+        </Space>
+        <span style={{ fontSize: 12, color: "#888" }}>{scriptResult.sub}</span>
+      </Space>
+    );
+  }
+
+  const mainText = `${available % 1 === 0 ? available : Number(available.toFixed(2))} ${unit}`;
+  return (
+    <Space direction="vertical" size={0}>
+      <Space>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{mainText}</span>
+        {isLow && <Tag icon={<ExclamationCircleOutlined />} color="warning">мало</Tag>}
+      </Space>
+    </Space>
+  );
+}
 
 function RollMaterialDisplay({ record, isLow }: { record: WarehouseItem; isLow: boolean }) {
   const available = record.quantity - (record.defective_quantity || 0);
@@ -96,6 +126,63 @@ function useDisplayFormat(scriptName: string | undefined, data: Record<string, u
     staleTime: 60_000,
   });
   return enabled ? result : null;
+}
+
+function OffcutsTab({ rawMaterials }: { rawMaterials: Array<{ id: number; name: string; width_mm?: number; height_mm?: number }> | undefined }) {
+  const queryClient = useQueryClient();
+  const { data: offcuts = [], isLoading } = useQuery({ queryKey: ["offcuts"], queryFn: () => getOffcuts() });
+  const [form] = Form.useForm();
+
+  const createMutation = useMutation({
+    mutationFn: createOffcut,
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["offcuts"] }); message.success("Обрезок добавлен"); form.resetFields(); },
+    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteOffcut,
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["offcuts"] }); message.success("Обрезок удалён"); },
+  });
+
+  const columns = [
+    { title: "ID", dataIndex: "id", width: 50 },
+    { title: "Сырьё", dataIndex: "raw_material_name", render: (v: string) => v || "—" },
+    { title: "Ширина", dataIndex: "width_mm", width: 100, render: (v: number) => `${v} мм` },
+    { title: "Высота", dataIndex: "height_mm", width: 100, render: (v: number) => `${v} мм` },
+    { title: "Кол-во", dataIndex: "quantity", width: 80 },
+    { title: "Заказ", dataIndex: "order_id", width: 80, render: (v: number) => v ? `#${v}` : "—" },
+    {
+      title: "", width: 40,
+      render: (_: unknown, record: Offcut) => (
+        <Popconfirm title="Удалить обрезок?" onConfirm={() => deleteMutation.mutate(record.id)}>
+          <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <Form form={form} layout="inline" onFinish={(v) => createMutation.mutate(v)} style={{ gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <Form.Item name="raw_material_id" rules={[{ required: true, message: "Сырьё" }]} style={{ marginBottom: 0 }}>
+          <Select placeholder="Сырьё" showSearch optionFilterProp="label" style={{ width: 180 }}>
+            {(rawMaterials ?? []).map((rm) => <Select.Option key={rm.id} value={rm.id} label={rm.name}>{rm.name}</Select.Option>)}
+          </Select>
+        </Form.Item>
+        <Form.Item name="width_mm" rules={[{ required: true, message: "Ширина" }]} style={{ marginBottom: 0 }}>
+          <InputNumber min={1} placeholder="Ширина, мм" style={{ width: 100 }} />
+        </Form.Item>
+        <Form.Item name="height_mm" rules={[{ required: true, message: "Высота" }]} style={{ marginBottom: 0 }}>
+          <InputNumber min={1} placeholder="Высота, мм" style={{ width: 100 }} />
+        </Form.Item>
+        <Form.Item name="quantity" initialValue={1} rules={[{ required: true }]} style={{ marginBottom: 0 }}>
+          <InputNumber min={1} style={{ width: 70 }} />
+        </Form.Item>
+        <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={createMutation.isPending}>Добавить</Button>
+      </Form>
+      <Table dataSource={offcuts} columns={columns} rowKey="id" size="small" pagination={{ pageSize: 10 }} loading={isLoading} />
+    </div>
+  );
 }
 
 export default function WarehousePage() {
@@ -300,15 +387,7 @@ export default function WarehousePage() {
           return <RollMaterialDisplay record={record} isLow={isLow} />;
         }
 
-        const mainText = `${available % 1 === 0 ? available : Number(available.toFixed(2))} ${unit}`;
-        return (
-          <Space direction="vertical" size={2}>
-            <Space>
-              <span style={{ fontWeight: 600 }}>{mainText}</span>
-              {isLow && <Tag icon={<ExclamationCircleOutlined />} color="warning">мало</Tag>}
-            </Space>
-          </Space>
-        );
+        return <SheetMaterialDisplay record={record} isLow={isLow} unit={unit} />;
       },
     },
     {
@@ -355,7 +434,11 @@ export default function WarehousePage() {
   const usedProductIds = new Set((items ?? []).filter((i) => !!i.product_id).map((i) => i.product_id!));
   const usedRawMaterialIds = new Set((items ?? []).filter((i) => !!i.raw_material_id).map((i) => i.raw_material_id!));
   const availableProducts = (products ?? []).filter((p) => editing ? true : !usedProductIds.has(p.id));
-  const availableRawMaterials = (rawMaterials ?? []).filter((rm) => editing ? true : !usedRawMaterialIds.has(rm.id));
+  const availableRawMaterials = (rawMaterials ?? []).filter((rm) => {
+    if (editing) return true;
+    if (usedRawMaterialIds.has(rm.id)) return true;
+    return true;
+  });
 
   const editingType: TabMode = editing
     ? (editing.product_id ? "products" : "raw_materials")
@@ -391,6 +474,11 @@ export default function WarehousePage() {
           size="small"
           destroyInactiveTabPane
           items={[
+            {
+              key: "offcuts",
+              label: "Обрезки",
+              children: <OffcutsTab rawMaterials={rawMaterials} />,
+            },
             {
               key: "product",
               label: "Списать продукт",
@@ -521,12 +609,22 @@ export default function WarehousePage() {
                       } }] : []),
                       { title: "Причина", dataIndex: "reason", ellipsis: true, render: (_: unknown, record: StockWriteoff) => {
                         if (record.order_id) {
+                          const offcutMatch = record.reason?.match(/обрезок\s+(\d+\.?\d*)×(\d+\.?\d*)\s*мм/i);
+                          if (offcutMatch) {
+                            return <span><Tag color="purple">Обрезок</Tag> <span style={{ fontSize: 11 }}>{offcutMatch[1]}×{offcutMatch[2]} мм</span> <a href={`/orders`} onClick={(e) => e.stopPropagation()}>Заказ #{record.order_id}</a></span>;
+                          }
                           return <span><Tag color="purple">Заказ</Tag> <a href={`/orders`} onClick={(e) => e.stopPropagation()}>#{record.order_id}</a></span>;
                         }
                         if (record.reason && record.reason.toLowerCase().includes("брак")) {
                           return <span><Tag color="red">Брак</Tag> {record.reason}</span>;
                         }
                         return record.reason || "—";
+                      } },
+                      { title: "Остаток", dataIndex: "remaining_offcut", width: 120, render: (_: unknown, record: StockWriteoff) => {
+                        if (record.remaining_width && record.remaining_height) {
+                          return <span style={{ fontSize: 11, color: "#52c41a" }}>→ {record.remaining_width}×{record.remaining_height} мм</span>;
+                        }
+                        return "—";
                       } },
                       { title: "Кто", dataIndex: "created_by_name", width: 120 },
                       ...(canViewPrices ? [{
@@ -593,8 +691,19 @@ export default function WarehousePage() {
           )}
           {tabMode === "raw_materials" && (
             <Form.Item name="raw_material_id" label="Сырьё" rules={[{ required: true, message: "Выберите сырьё" }]}>
-              <Select placeholder="Выберите сырьё" disabled={!!editing} showSearch optionFilterProp="label">
-                {availableRawMaterials.map((rm) => (<Select.Option key={rm.id} value={rm.id} label={rm.name}>{rm.name} ({unitTypeLabels[rm.unit_type] || rm.unit_type})</Select.Option>))}
+              <Select placeholder="Выберите сырьё" disabled={!!editing} showSearch optionFilterProp="label" onChange={(val: number) => {
+                if (usedRawMaterialIds.has(val) && !editing) {
+                  const existing = items?.find((i) => i.raw_material_id === val);
+                  if (existing) {
+                    openEdit(existing);
+                    form.resetFields();
+                  }
+                }
+              }}>
+                {availableRawMaterials.map((rm) => {
+                  const onWarehouse = usedRawMaterialIds.has(rm.id);
+                  return <Select.Option key={rm.id} value={rm.id} label={rm.name}>{rm.name} ({unitTypeLabels[rm.unit_type] || rm.unit_type}){onWarehouse ? " — уже на складе" : ""}</Select.Option>;
+                })}
               </Select>
             </Form.Item>
           )}

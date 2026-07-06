@@ -127,6 +127,7 @@ export interface OrderItem {
   manual_writeoff_cut_height_mm?: number;
   manual_writeoff_quantity?: number;
   manual_writeoff_raw_material_name?: string;
+  processing_method?: string;
 }
 
 export interface OrderItemFormData {
@@ -142,6 +143,7 @@ export interface OrderItemFormData {
   raw_materials?: { raw_material_id: number; raw_material_qty?: number; cut_width_mm?: number; cut_height_mm?: number }[];
   quantity: number;
   unit_price?: number;
+  processing_method?: string;
   manual_writeoff_pending?: boolean;
   manual_writeoff_raw_material_id?: number;
   manual_writeoff_cut_width_mm?: number;
@@ -372,6 +374,8 @@ export interface StockWriteoff {
   order_id?: number;
   created_by?: number;
   created_by_name?: string;
+  remaining_width?: number;
+  remaining_height?: number;
   created_at: string;
   item_name?: string;
   unit_price?: number;

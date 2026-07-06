@@ -31,6 +31,7 @@ export default function AIProviderTab() {
         model_name: settings.model_name,
         temperature: settings.temperature,
         max_tokens: settings.max_tokens,
+        timeout: settings.timeout,
         system_prompt: settings.system_prompt,
         is_active: settings.is_active,
       });
@@ -65,6 +66,7 @@ export default function AIProviderTab() {
       model_name: values.model_name as string,
       temperature: values.temperature as number,
       max_tokens: values.max_tokens as number,
+      timeout: values.timeout as number,
       system_prompt: (values.system_prompt as string) || undefined,
       is_active: values.is_active as boolean,
     });
@@ -74,7 +76,7 @@ export default function AIProviderTab() {
 
   return (
     <Card loading={isLoading}>
-      <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{ provider_name: "llamacpp", temperature: 0.3, max_tokens: 4096, is_active: true }}>
+      <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{ provider_name: "llamacpp", temperature: 0.3, max_tokens: 4096, timeout: 120, is_active: true }}>
         <Row gutter={24}>
           <Col xs={24} lg={12}>
             <Typography.Title level={5}>
@@ -120,6 +122,10 @@ export default function AIProviderTab() {
 
             <Form.Item name="max_tokens" label="Max Tokens" tooltip="Максимальная длина ответа">
               <InputNumber min={256} max={32768} step={256} style={{ width: "100%" }} />
+            </Form.Item>
+
+            <Form.Item name="timeout" label="Таймаут ответа (сек)" tooltip="Максимальное время ожидания ответа от модели в секундах">
+              <InputNumber min={10} max={600} step={10} style={{ width: "100%" }} />
             </Form.Item>
 
             <Form.Item name="system_prompt" label="Системный промпт" tooltip="Переопределяет стандартный промпт ассистента">

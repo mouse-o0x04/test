@@ -29,6 +29,9 @@ export const toggleItemCompleted = (orderId: number, itemId: number) =>
 export const toggleItemPrinted = (orderId: number, itemId: number) =>
   api.put<Order>(`/orders/${orderId}/items/${itemId}/toggle-printed`).then((r) => r.data);
 
+export const setProcessingMethod = (orderId: number, itemId: number, processingMethod: string) =>
+  api.put<Order>(`/orders/${orderId}/items/${itemId}/processing-method`, { processing_method: processingMethod }).then((r) => r.data);
+
 export const saveItemAsProduct = (orderId: number, itemId: number) =>
   api.put<Order>(`/orders/${orderId}/items/${itemId}/save-as-product`).then((r) => r.data);
 

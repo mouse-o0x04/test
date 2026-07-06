@@ -1,5 +1,7 @@
 import { SendOutlined, ClearOutlined, ToolOutlined, RobotOutlined, UserOutlined } from "@ant-design/icons";
-import { Badge, Button, Card, Collapse, Input, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
+import { Badge, Button, Collapse, Drawer, Input, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sendChatMessage, type ToolCall } from "../api/aiAssistant";
 
@@ -151,22 +153,7 @@ export default function AIAssistant() {
       </div>
 
       {open && (
-        <Card
-          style={{
-            position: "fixed",
-            bottom: 90,
-            right: 24,
-            width: 400,
-            maxHeight: 600,
-            zIndex: 1000,
-            display: "flex",
-            flexDirection: "column",
-            boxShadow: "0 6px 24px rgba(0,0,0,0.15)",
-            borderRadius: 12,
-            overflow: "hidden",
-            padding: 0,
-          }}
-          bodyStyle={{ padding: 0, display: "flex", flexDirection: "column", height: 560 }}
+        <Drawer
           title={
             <Space>
               <RobotOutlined style={{ fontSize: 18 }} />
@@ -178,7 +165,27 @@ export default function AIAssistant() {
               <Button type="text" icon={<ClearOutlined />} onClick={clearChat} size="small" />
             </Tooltip>
           }
+          open={open}
+          onClose={() => setOpen(false)}
+          width={480}
+          placement="right"
+          styles={{ body: { padding: 0, display: "flex", flexDirection: "column", height: "100%" } }}
         >
+          <style>{`
+            .ai-markdown table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+            .ai-markdown th, .ai-markdown td { border: 1px solid #d9d9d9; padding: 6px 8px; text-align: left; }
+            .ai-markdown th { background: #fafafa; font-weight: 600; }
+            .ai-markdown tr:nth-child(even) { background: #fafafa; }
+            .ai-markdown p { margin: 4px 0; }
+            .ai-markdown ul, .ai-markdown ol { margin: 4px 0; padding-left: 20px; }
+            .ai-markdown li { margin: 2px 0; }
+            .ai-markdown code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+            .ai-markdown pre { background: #f5f5f5; padding: 8px; border-radius: 6px; overflow-x: auto; }
+            .ai-markdown pre code { background: none; padding: 0; }
+            .ai-markdown h1, .ai-markdown h2, .ai-markdown h3, .ai-markdown h4 { margin: 8px 0 4px; }
+            .ai-markdown blockquote { border-left: 3px solid #d9d9d9; padding-left: 12px; color: #666; margin: 8px 0; }
+            .ai-markdown hr { border: none; border-top: 1px solid #f0f0f0; margin: 8px 0; }
+          `}</style>
           <div
             style={{
               flex: 1,
@@ -269,12 +276,17 @@ export default function AIAssistant() {
                       padding: "8px 12px",
                       borderRadius: msg.role === "user" ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
                       border: msg.role === "assistant" ? "1px solid #f0f0f0" : "none",
-                      whiteSpace: "pre-wrap",
                       fontSize: 13,
-                      lineHeight: 1.5,
+                      lineHeight: 1.6,
                     }}
                   >
-                    {msg.content}
+                    {msg.role === "assistant" ? (
+                      <div className="ai-markdown">
+                        <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+                      </div>
+                    ) : (
+                      <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
+                    )}
                   </div>
                   <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: "block" }}>
                     {formatTime(msg.timestamp)}
@@ -315,7 +327,7 @@ export default function AIAssistant() {
               />
             </Space.Compact>
           </div>
-        </Card>
+        </Drawer>
       )}
     </>
   );
