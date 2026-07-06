@@ -31,6 +31,7 @@ class OrderItemCreate(BaseModel):
     raw_materials: list[OrderItemRawMaterialIn] = []
     quantity: int
     unit_price: float | None = None
+    processing_method: str | None = None
     manual_writeoff_pending: bool = False
     manual_writeoff_raw_material_id: int | None = None
     manual_writeoff_cut_width_mm: float | None = None
@@ -53,6 +54,7 @@ class OrderItemOut(BaseModel):
     cut_width_mm: float | None = None
     cut_height_mm: float | None = None
     raw_materials: list[OrderItemRawMaterialOut] = []
+    processing_method: str | None = None
     manual_writeoff_pending: bool = False
     manual_writeoff_raw_material_id: int | None = None
     manual_writeoff_cut_width_mm: float | None = None

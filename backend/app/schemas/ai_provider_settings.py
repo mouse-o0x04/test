@@ -11,6 +11,7 @@ class AIProviderSettingsOut(BaseModel):
     model_name: str
     temperature: float
     max_tokens: int
+    timeout: int = 120
     system_prompt: str | None = None
     is_active: bool
     created_at: datetime | None = None
@@ -26,5 +27,6 @@ class AIProviderSettingsUpdate(BaseModel):
     model_name: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    timeout: int | None = None
     system_prompt: str | None = None
     is_active: bool | None = None

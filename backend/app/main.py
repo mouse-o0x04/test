@@ -26,6 +26,8 @@ from app.routers.order_settings import router as order_settings_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.db_backup import router as db_backup_router
 from app.routers.audit_log import router as audit_log_router
+from app.routers.order_templates import router as order_templates_router
+from app.routers.offcuts import router as offcuts_router
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,8 @@ def _ensure_columns():
         ("order_items", "manual_writeoff_cut_width_mm", "DOUBLE PRECISION"),
         ("order_items", "manual_writeoff_cut_height_mm", "DOUBLE PRECISION"),
         ("order_items", "manual_writeoff_quantity", "DOUBLE PRECISION"),
+        ("ai_provider_settings", "timeout", "INTEGER DEFAULT 120"),
+        ("order_items", "processing_method", "VARCHAR(100)"),
     ]
     db = Session()
     try:
@@ -133,6 +137,8 @@ app.include_router(knowledge_router, prefix=API_PREFIX)
 app.include_router(writeoffs_router, prefix=API_PREFIX)
 app.include_router(db_backup_router, prefix=API_PREFIX)
 app.include_router(audit_log_router, prefix=API_PREFIX)
+app.include_router(order_templates_router, prefix=API_PREFIX)
+app.include_router(offcuts_router, prefix=API_PREFIX)
 
 
 @app.get("/api/health")

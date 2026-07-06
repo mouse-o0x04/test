@@ -1,6 +1,3 @@
-import math
-
-
 def calculate(data):
     """Расход рулонного материала.
 

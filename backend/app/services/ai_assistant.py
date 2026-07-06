@@ -825,6 +825,7 @@ def _get_ai_settings():
                 "model_name": row.model_name,
                 "temperature": row.temperature,
                 "max_tokens": row.max_tokens,
+                "timeout": getattr(row, "timeout", 120) or 120,
             }
     except Exception:
         pass
@@ -836,6 +837,7 @@ def _get_ai_settings():
         "model_name": settings.llama_model_name,
         "temperature": 0.3,
         "max_tokens": 4096,
+        "timeout": 120,
     }
 
 
@@ -859,9 +861,10 @@ def chat(user_message: str, history: list[dict]) -> dict:
 
     tool_calls_executed = []
     MAX_ROUNDS = 10
+    ai_timeout = ai.get("timeout", 120)
 
     for _ in range(MAX_ROUNDS):
-        with _get_http_client(timeout=120) as client:
+        with _get_http_client(timeout=ai_timeout) as client:
             resp = client.post(
                 f"{base_url}/v1/chat/completions",
                 json={

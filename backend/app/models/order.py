@@ -55,6 +55,7 @@ class OrderItem(BaseOrders):
     manual_writeoff_cut_width_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     manual_writeoff_cut_height_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     manual_writeoff_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    processing_method: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     order: Mapped["Order"] = relationship("Order", back_populates="items")
 

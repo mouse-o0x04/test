@@ -45,43 +45,30 @@ def delete_script(name: str) -> bool:
     return False
 
 
-def run_script(name: str, data: dict) -> float:
+def _build_namespace():
+    safe_builtins = {k: v for k, v in __builtins__.__dict__.items() if k not in DENIED_BUILTINS} if hasattr(__builtins__, "__dict__") else {}
+    return {
+        "__builtins__": safe_builtins,
+        "json": json,
+        "math": __import__("math"),
+        "rectpack": __import__("rectpack"),
+        "newPacker": __import__("rectpack").newPacker,
+        "round": round, "int": int, "float": float, "str": str, "bool": bool,
+        "len": len, "min": min, "max": max, "abs": abs, "sum": sum,
+        "enumerate": enumerate, "zip": zip, "sorted": sorted,
+        "map": map, "filter": filter, "list": list, "dict": dict,
+        "tuple": tuple, "set": set, "range": range,
+        "True": True, "False": False, "None": None,
+    }
+
+
+def run_script(name: str, data: dict):
     path = SCRIPTS_DIR / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"Script '{name}' not found")
 
     code = path.read_text()
-
-    safe_builtins = {k: v for k, v in __builtins__.__dict__.items() if k not in DENIED_BUILTINS} if hasattr(__builtins__, "__dict__") else {}
-
-    namespace = {
-        "__builtins__": safe_builtins,
-        "json": json,
-        "math": __import__("math"),
-        "round": round,
-        "int": int,
-        "float": float,
-        "str": str,
-        "bool": bool,
-        "len": len,
-        "min": min,
-        "max": max,
-        "abs": abs,
-        "sum": sum,
-        "enumerate": enumerate,
-        "zip": zip,
-        "sorted": sorted,
-        "map": map,
-        "filter": filter,
-        "list": list,
-        "dict": dict,
-        "tuple": tuple,
-        "set": set,
-        "True": True,
-        "False": False,
-        "None": None,
-    }
-
+    namespace = _build_namespace()
     exec(code, namespace)
 
     calc_fn = namespace.get("calculate")
@@ -90,10 +77,12 @@ def run_script(name: str, data: dict) -> float:
 
     result = calc_fn(data)
 
-    if not isinstance(result, (int, float)):
-        raise ValueError(f"Script '{name}' must return a number, got {type(result).__name__}")
-
-    return float(result)
+    if isinstance(result, dict):
+        num = result.get("sheets_to_write_off", 0) or result.get("result", 0)
+        return float(num), result
+    if isinstance(result, (int, float)):
+        return float(result), {}
+    raise ValueError(f"Script '{name}' must return a number or dict, got {type(result).__name__}")
 
 
 def run_display_script(name: str, data: dict) -> dict:
@@ -103,37 +92,7 @@ def run_display_script(name: str, data: dict) -> dict:
         raise FileNotFoundError(f"Script '{name}' not found")
 
     code = path.read_text()
-
-    safe_builtins = {k: v for k, v in __builtins__.__dict__.items() if k not in DENIED_BUILTINS} if hasattr(__builtins__, "__dict__") else {}
-
-    namespace = {
-        "__builtins__": safe_builtins,
-        "json": json,
-        "math": __import__("math"),
-        "round": round,
-        "int": int,
-        "float": float,
-        "str": str,
-        "bool": bool,
-        "len": len,
-        "min": min,
-        "max": max,
-        "abs": abs,
-        "sum": sum,
-        "enumerate": enumerate,
-        "zip": zip,
-        "sorted": sorted,
-        "map": map,
-        "filter": filter,
-        "list": list,
-        "dict": dict,
-        "tuple": tuple,
-        "set": set,
-        "True": True,
-        "False": False,
-        "None": None,
-    }
-
+    namespace = _build_namespace()
     exec(code, namespace)
 
     format_fn = namespace.get("format")

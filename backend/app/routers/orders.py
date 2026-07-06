@@ -75,7 +75,7 @@ def _calc_custom_raw_material_qty(raw_material: RawMaterial, cut_width_mm: float
     return 0
 
 
-def _calc_all_materials_needed(product: Product, quantity: int, cut_width_mm: float = None, cut_height_mm: float = None) -> list[tuple[int, float]]:
+def _calc_all_materials_needed(product: Product, quantity: int, cut_width_mm: float = None, cut_height_mm: float = None, processing_method: str = None, order_id: int = None) -> list[tuple[int, float]]:
     """Return list of (raw_material_id, needed_qty) for all materials of this product."""
     from app.models.product_raw_material import ProductRawMaterial
     db = SessionFactory()
@@ -93,7 +93,7 @@ def _calc_all_materials_needed(product: Product, quantity: int, cut_width_mm: fl
                 material = db.get(RawMaterial, prm.raw_material_id)
                 if not material:
                     continue
-                needed = _calc_single_material_needed(material, quantity, prm.coefficient, db, pw, ph)
+                needed = _calc_single_material_needed(material, quantity, prm.coefficient, db, pw, ph, processing_method, order_id)
                 if needed > 0:
                     results.append((prm.raw_material_id, needed))
             return results
@@ -101,7 +101,7 @@ def _calc_all_materials_needed(product: Product, quantity: int, cut_width_mm: fl
         if product.raw_material_id:
             material = db.get(RawMaterial, product.raw_material_id)
             if material:
-                needed = _calc_single_material_needed(material, quantity, product.material_coefficient, db, pw, ph)
+                needed = _calc_single_material_needed(material, quantity, product.material_coefficient, db, pw, ph, processing_method, order_id)
                 if needed > 0:
                     return [(product.raw_material_id, needed)]
         return []
@@ -109,7 +109,7 @@ def _calc_all_materials_needed(product: Product, quantity: int, cut_width_mm: fl
         db.close()
 
 
-def _calc_single_material_needed(material: RawMaterial, quantity: int, coefficient: float, db, cut_width_mm: float = None, cut_height_mm: float = None) -> float:
+def _calc_single_material_needed(material: RawMaterial, quantity: int, coefficient: float, db, cut_width_mm: float = None, cut_height_mm: float = None, processing_method: str = None, order_id: int = None) -> float:
     """Calculate how much of a single raw material is needed for given quantity."""
     wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == material.id)).scalar_one_or_none()
     if wh_item and wh_item.stock_calculation_script:
@@ -122,9 +122,22 @@ def _calc_single_material_needed(material: RawMaterial, quantity: int, coefficie
             "material_coefficient": coefficient,
             "cut_width_mm": cut_width_mm or 0,
             "cut_height_mm": cut_height_mm or 0,
+            "material_name": material.name,
+            "processing_method": processing_method or "",
         }
         try:
-            return float(run_script(wh_item.stock_calculation_script, script_data))
+            result_num, result_data = run_script(wh_item.stock_calculation_script, script_data)
+            if result_data.get("error"):
+                raise HTTPException(status_code=400, detail=result_data["error"])
+            if result_data.get("new_offcuts"):
+                from app.models.offcut import Offcut
+                for oc in result_data["new_offcuts"]:
+                    db.add(Offcut(raw_material_id=rm.id, width_mm=oc["width"], height_mm=oc["height"], quantity=1, order_id=order_id))
+                db.flush()
+            if result_data.get("offcuts_used"):
+                # Обрезки будут удалены в create_order/update_order через pending_offcuts_delete
+                pass
+            return float(result_num)
         except Exception as e:
             logger.warning(f"Script {wh_item.stock_calculation_script} failed: {e}, using default calc")
 
@@ -153,6 +166,67 @@ def _calc_single_material_needed(material: RawMaterial, quantity: int, coefficie
         return math.ceil(exact * 2) / 2
     else:
         return 0
+
+
+def _check_stock_sufficiency(order_items: list, db: Session):
+    """Check if warehouse has enough material for all order items. Raises HTTPException if not."""
+    from app.models.raw_material import RawMaterial
+    for oi in order_items:
+        if oi.product_id:
+            product = db.get(Product, oi.product_id)
+            if not product:
+                continue
+            materials_needed = _calc_all_materials_needed(product, oi.quantity)
+            for raw_material_id, needed in materials_needed:
+                wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == raw_material_id)).scalar_one_or_none()
+                if not wh_item:
+                    material = db.get(RawMaterial, raw_material_id)
+                    name = material.name if material else f"#{raw_material_id}"
+                    raise HTTPException(status_code=400, detail=f"Нет на складе материала «{name}» для «{oi.product_name_snapshot}»")
+                available = wh_item.quantity - (wh_item.defective_quantity or 0)
+                if available < needed:
+                    material = db.get(RawMaterial, raw_material_id)
+                    name = material.name if material else f"#{raw_material_id}"
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Недостаточно материала «{name}» для «{oi.product_name_snapshot}». Нужно: {needed}, доступно: {available}",
+                    )
+        else:
+            orm_entries = db.execute(
+                select(OrderItemRawMaterial).where(OrderItemRawMaterial.order_item_id == oi.id)
+            ).scalars().all()
+            if orm_entries:
+                for orm in orm_entries:
+                    needed = (orm.raw_material_qty or 0) * oi.quantity
+                    if needed > 0:
+                        wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == orm.raw_material_id)).scalar_one_or_none()
+                        if not wh_item:
+                            material = db.get(RawMaterial, orm.raw_material_id)
+                            name = material.name if material else f"#{orm.raw_material_id}"
+                            raise HTTPException(status_code=400, detail=f"Нет на складе материала «{name}» для «{oi.product_name_snapshot}»")
+                        available = wh_item.quantity - (wh_item.defective_quantity or 0)
+                        if available < needed:
+                            material = db.get(RawMaterial, orm.raw_material_id)
+                            name = material.name if material else f"#{orm.raw_material_id}"
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Недостаточно материала «{name}» для «{oi.product_name_snapshot}». Нужно: {needed}, доступно: {available}",
+                            )
+            elif oi.raw_material_id and oi.raw_material_qty and oi.raw_material_qty > 0:
+                needed = oi.raw_material_qty * oi.quantity
+                wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == oi.raw_material_id)).scalar_one_or_none()
+                if not wh_item:
+                    material = db.get(RawMaterial, oi.raw_material_id)
+                    name = material.name if material else f"#{oi.raw_material_id}"
+                    raise HTTPException(status_code=400, detail=f"Нет на складе материала «{name}» для «{oi.product_name_snapshot}»")
+                available = wh_item.quantity - (wh_item.defective_quantity or 0)
+                if available < needed:
+                    material = db.get(RawMaterial, oi.raw_material_id)
+                    name = material.name if material else f"#{oi.raw_material_id}"
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Недостаточно материала «{name}» для «{oi.product_name_snapshot}». Нужно: {needed}, доступно: {available}",
+                    )
 
 
 def _calc_raw_material_needed(product: Product, quantity: int) -> float:
@@ -201,12 +275,40 @@ def _deduct_raw_material(order_items: list, db: Session, order_id: int = None):
                 for orm in orm_entries:
                     needed = (orm.raw_material_qty or 0) * oi.quantity
                     if needed > 0:
-                        _do_deduct(db, oi, orm.raw_material_id, needed, order_id)
+                        _do_deduct_with_offcuts(db, oi, orm.raw_material_id, needed, order_id, oi.cut_width_mm, oi.cut_height_mm, oi.processing_method, oi.quantity)
             elif oi.raw_material_id and oi.raw_material_qty and oi.raw_material_qty > 0:
                 needed = oi.raw_material_qty * oi.quantity
-                _do_deduct(db, oi, oi.raw_material_id, needed, order_id)
+                _do_deduct_with_offcuts(db, oi, oi.raw_material_id, needed, order_id, oi.cut_width_mm, oi.cut_height_mm, oi.processing_method, oi.quantity)
             else:
                 logger.debug(f"deduct: skip oi#{oi.id} no product and no raw_material info")
+
+
+def _do_deduct_with_offcuts(db, oi, raw_material_id, needed, order_id, cut_width_mm=None, cut_height_mm=None, processing_method=None, quantity=1):
+    """Списание с учётом обрезков — скрипт создаёт новые обрезки."""
+    from app.models.offcut import Offcut
+    rm = db.get(RawMaterial, raw_material_id)
+    if not rm:
+        return
+    wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == raw_material_id)).scalar_one_or_none()
+    if wh_item and wh_item.stock_calculation_script and cut_width_mm and cut_height_mm:
+        offcuts = db.execute(select(Offcut).where(Offcut.raw_material_id == raw_material_id)).scalars().all()
+        offcuts_data = [{"width": o.width_mm, "height": o.height_mm} for o in offcuts]
+        script_data = {
+            "cut_width_mm": cut_width_mm, "cut_height_mm": cut_height_mm,
+            "quantity": quantity or 1, "width_mm": rm.width_mm, "height_mm": rm.height_mm,
+            "roll_width_m": rm.roll_width_m, "roll_length_m": rm.roll_length_m,
+            "material_name": rm.name, "processing_method": processing_method or "",
+            "offcuts": offcuts_data,
+        }
+        try:
+            result_num, result_data = run_script(wh_item.stock_calculation_script, script_data)
+            if result_data.get("new_offcuts"):
+                for oc in result_data["new_offcuts"]:
+                    db.add(Offcut(raw_material_id=raw_material_id, width_mm=oc["width"], height_mm=oc["height"], quantity=1, order_id=order_id))
+                db.flush()
+        except Exception as e:
+            logger.warning(f"Script {wh_item.stock_calculation_script} failed during deduct: {e}")
+    _do_deduct(db, oi, raw_material_id, needed, order_id)
 
 
 def _do_deduct(db: Session, oi, raw_material_id: int, needed: float, order_id: int = None):
@@ -334,7 +436,7 @@ def calculate_price(product_id: int, quantity: int = 1):
                     "product_unit_type": product.unit_type,
                     "product_description": product.description,
                 }
-                total = run_script(product.formula_script, script_data)
+                total, _ = run_script(product.formula_script, script_data)
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Script error: {e}")
         elif product.formula and product.formula.strip():
@@ -427,6 +529,8 @@ def get_order_history(order_id: int):
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
     db = SessionFactory()
+    pending_offcuts = []
+    pending_offcuts_delete = []
     try:
         client = db.get(Client, data.client_id)
         if not client:
@@ -496,10 +600,14 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
                     rm = db.get(RawMaterial, item_data.raw_material_id)
                     if not rm:
                         raise HTTPException(status_code=400, detail="Raw material not found")
-                    if rm.roll_width_m and item_data.cut_width_mm > rm.roll_width_m * 1000:
-                        raise HTTPException(status_code=400, detail=f"Cut width {item_data.cut_width_mm}mm exceeds roll width {rm.roll_width_m * 1000}mm")
+                    if rm.roll_width_m and item_data.cut_width_mm > rm.roll_width_m * 1000 and (not item_data.cut_height_mm or item_data.cut_height_mm > rm.roll_width_m * 1000):
+                        raise HTTPException(status_code=400, detail=f"Отрез {item_data.cut_width_mm}×{item_data.cut_height_mm}мм не влезает в рулон шириной {rm.roll_width_m * 1000}мм ни в одном повороте")
                     wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == rm.id)).scalar_one_or_none()
                     if wh_item and wh_item.stock_calculation_script:
+                        from app.models.offcut import Offcut
+                        offcuts = db.execute(select(Offcut).where(Offcut.raw_material_id == rm.id)).scalars().all()
+                        offcuts_data = [{"width": o.width_mm, "height": o.height_mm} for o in offcuts]
+                        print(f"OFFCUTS_DEBUG: script={wh_item.stock_calculation_script} offcuts_count={len(offcuts_data)} offcuts={offcuts_data}")
                         script_data = {
                             "cut_width_mm": item_data.cut_width_mm,
                             "cut_height_mm": item_data.cut_height_mm,
@@ -508,9 +616,29 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
                             "height_mm": rm.height_mm,
                             "roll_width_m": rm.roll_width_m,
                             "roll_length_m": rm.roll_length_m,
+                            "material_name": rm.name,
+                            "processing_method": item_data.processing_method or "",
+                            "offcuts": offcuts_data,
                         }
                         try:
-                            computed_rm_qty = run_script(wh_item.stock_calculation_script, script_data)
+                            script_result, script_data_out = run_script(wh_item.stock_calculation_script, script_data)
+                            if script_data_out.get("error"):
+                                raise HTTPException(status_code=400, detail=script_data_out["error"])
+                            if script_data_out.get("new_offcuts"):
+                                for oc in script_data_out["new_offcuts"]:
+                                    pending_offcuts.append({"raw_material_id": rm.id, "width_mm": oc["width"], "height_mm": oc["height"]})
+                            if script_data_out.get("offcuts_used"):
+                                for oc in script_data_out["offcuts_used"]:
+                                    pending_offcuts_delete.append({
+                                        "raw_material_id": rm.id,
+                                        "width_mm": oc["width"],
+                                        "height_mm": oc["height"],
+                                        "remaining_width": oc.get("remaining_width", 0),
+                                        "remaining_height": oc.get("remaining_height", 0)
+                                    })
+                            computed_rm_qty = script_result / item_data.quantity if item_data.quantity else script_result
+                        except HTTPException:
+                            raise
                         except Exception as e:
                             logger.warning(f"Script {wh_item.stock_calculation_script} failed: {e}, using default calc")
                             computed_rm_qty = _calc_custom_raw_material_qty(rm, item_data.cut_width_mm, item_data.cut_height_mm)
@@ -529,6 +657,7 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
                     cut_height_mm=item_data.cut_height_mm,
                     quantity=item_data.quantity,
                     unit_price=item_data.unit_price,
+                    processing_method=item_data.processing_method,
                     manual_writeoff_pending=item_data.manual_writeoff_pending,
                     manual_writeoff_raw_material_id=item_data.manual_writeoff_raw_material_id,
                     manual_writeoff_cut_width_mm=item_data.manual_writeoff_cut_width_mm,
@@ -579,11 +708,34 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
                     wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == rm_id)).scalar_one_or_none()
                     if wh_item and wh_item.stock_calculation_script:
                         try:
-                            computed_qty = run_script(wh_item.stock_calculation_script, {
+                            from app.models.offcut import Offcut
+                            offcuts = db.execute(select(Offcut).where(Offcut.raw_material_id == rm_id)).scalars().all()
+                            offcuts_data = [{"width": o.width_mm, "height": o.height_mm} for o in offcuts]
+                            script_result, script_data_out = run_script(wh_item.stock_calculation_script, {
                                 "cut_width_mm": rm_data.cut_width_mm, "cut_height_mm": rm_data.cut_height_mm,
                                 "quantity": oi.quantity, "width_mm": rm.width_mm, "height_mm": rm.height_mm,
                                 "roll_width_m": rm.roll_width_m, "roll_length_m": rm.roll_length_m,
+                                "material_name": rm.name,
+                                "offcuts": offcuts_data,
                             })
+                            if script_data_out.get("error"):
+                                raise HTTPException(status_code=400, detail=script_data_out["error"])
+                            if script_data_out.get("new_offcuts"):
+                                for oc in script_data_out["new_offcuts"]:
+                                    pending_offcuts.append({"raw_material_id": rm_id, "width_mm": oc["width"], "height_mm": oc["height"]})
+                                db.flush()
+                            if script_data_out.get("offcuts_used"):
+                                for oc in script_data_out["offcuts_used"]:
+                                    pending_offcuts_delete.append({
+                                        "raw_material_id": rm_id,
+                                        "width_mm": oc["width"],
+                                        "height_mm": oc["height"],
+                                        "remaining_width": oc.get("remaining_width", 0),
+                                        "remaining_height": oc.get("remaining_height", 0)
+                                    })
+                            computed_qty = script_result / oi.quantity if oi.quantity else script_result
+                        except HTTPException:
+                            raise
                         except Exception:
                             computed_qty = _calc_custom_raw_material_qty(rm, rm_data.cut_width_mm, rm_data.cut_height_mm)
                     else:
@@ -600,10 +752,56 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
             logger.debug(f"create: deducting stock for status={data.status}")
             _deduct_raw_material(order_items, db, order_id=order.id)
         else:
-            logger.debug(f"create: no stock deduction for status={data.status}")
+            logger.debug(f"create: checking stock availability for status={data.status}")
+            _check_stock_sufficiency(order_items, db)
 
         db.commit()
         db.refresh(order)
+
+        if pending_offcuts:
+            from app.models.offcut import Offcut
+            for oc in pending_offcuts:
+                db.add(Offcut(raw_material_id=oc["raw_material_id"], width_mm=oc["width_mm"], height_mm=oc["height_mm"], quantity=1, order_id=order.id))
+            db.commit()
+
+        if pending_offcuts_delete:
+            from app.models.offcut import Offcut
+            from app.models.stock_writeoff import StockWriteoff
+            for oc in pending_offcuts_delete:
+                offcut = db.execute(
+                    select(Offcut).where(
+                        Offcut.raw_material_id == oc["raw_material_id"],
+                        Offcut.width_mm == oc["width_mm"],
+                        Offcut.height_mm == oc["height_mm"]
+                    )
+                ).scalar_one_or_none()
+                if offcut:
+                    # Логируем использование обрезка в истории склада
+                    db.add(StockWriteoff(
+                        item_type="raw_material",
+                        raw_material_id=oc["raw_material_id"],
+                        quantity=1,
+                        reason=f"Использован обрезок {oc['width_mm']}×{oc['height_mm']} мм для заказа #{order.id}",
+                        order_id=order.id,
+                        created_by=user.id,
+                        created_by_name=user.full_name or user.username,
+                        remaining_width=oc.get("remaining_width", 0) if oc.get("remaining_width", 0) > 0 else None,
+                        remaining_height=oc.get("remaining_height", 0) if oc.get("remaining_height", 0) > 0 else None,
+                    ))
+                    # Если есть остаток, создаём новый обрезок
+                    if oc.get("remaining_width", 0) > 0 and oc.get("remaining_height", 0) > 0:
+                        # Проверяем что остаток достаточно большой (больше минимального размера изделия)
+                        min_item_size = 100  # мм, минимальный размер для хранения обрезка
+                        if oc["remaining_width"] > min_item_size and oc["remaining_height"] > min_item_size:
+                            db.add(Offcut(
+                                raw_material_id=oc["raw_material_id"],
+                                width_mm=oc["remaining_width"],
+                                height_mm=oc["remaining_height"],
+                                quantity=1,
+                                order_id=order.id
+                            ))
+                    db.delete(offcut)
+            db.commit()
 
         log_created(order, user, db)
 
@@ -631,6 +829,7 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user)):
 @router.put("/{order_id}", response_model=OrderOut)
 def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_current_user)):
     db = SessionFactory()
+    pending_offcuts_delete = []
     try:
         order = db.get(Order, order_id)
         if not order:
@@ -648,6 +847,18 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
             current_items = db.execute(
                 select(OrderItem).where(OrderItem.order_id == order_id)
             ).scalars().all()
+
+            if data.status == "ready":
+                items_without_method = [
+                    i for i in current_items
+                    if i.raw_material_id and not i.processing_method
+                ]
+                if items_without_method:
+                    names = [i.product_name_snapshot or f"#{i.id}" for i in items_without_method]
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Нельзя установить статус «Готов»: не указан способ обработки для позиций: {', '.join(names)}"
+                    )
 
             if not stock_was_active and new_stock_active:
                 _deduct_raw_material(current_items, db, order_id=order_id)
@@ -733,7 +944,7 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
                                 "product_unit_type": product.unit_type,
                                 "product_description": product.description,
                             }
-                            item_price = run_script(product.formula_script, script_data)
+                            item_price, _ = run_script(product.formula_script, script_data)
                         except Exception as e:
                             raise HTTPException(status_code=400, detail=f"Script error for product {product.name}: {e}")
                     elif product.formula and product.formula.strip():
@@ -767,8 +978,8 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
                         rm = db.get(RawMaterial, item_data.raw_material_id)
                         if not rm:
                             raise HTTPException(status_code=400, detail="Raw material not found")
-                        if rm.roll_width_m and item_data.cut_width_mm > rm.roll_width_m * 1000:
-                            raise HTTPException(status_code=400, detail=f"Cut width {item_data.cut_width_mm}mm exceeds roll width {rm.roll_width_m * 1000}mm")
+                        if rm.roll_width_m and item_data.cut_width_mm > rm.roll_width_m * 1000 and (not item_data.cut_height_mm or item_data.cut_height_mm > rm.roll_width_m * 1000):
+                            raise HTTPException(status_code=400, detail=f"Отрез {item_data.cut_width_mm}×{item_data.cut_height_mm}мм не влезает в рулон шириной {rm.roll_width_m * 1000}мм ни в одном повороте")
                         computed_rm_qty = _calc_custom_raw_material_qty(rm, item_data.cut_width_mm, item_data.cut_height_mm)
 
                     oi = OrderItem(
@@ -784,6 +995,7 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
                         cut_height_mm=item_data.cut_height_mm,
                         quantity=item_data.quantity,
                         unit_price=item_data.unit_price,
+                        processing_method=item_data.processing_method,
                         manual_writeoff_pending=item_data.manual_writeoff_pending,
                         manual_writeoff_raw_material_id=item_data.manual_writeoff_raw_material_id,
                         manual_writeoff_cut_width_mm=item_data.manual_writeoff_cut_width_mm,
@@ -813,11 +1025,34 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
                         wh_item = db.execute(select(WarehouseItem).where(WarehouseItem.raw_material_id == rm_id)).scalar_one_or_none()
                         if wh_item and wh_item.stock_calculation_script:
                             try:
-                                computed_qty = run_script(wh_item.stock_calculation_script, {
+                                from app.models.offcut import Offcut
+                                offcuts = db.execute(select(Offcut).where(Offcut.raw_material_id == rm_id)).scalars().all()
+                                offcuts_data = [{"width": o.width_mm, "height": o.height_mm} for o in offcuts]
+                                script_result, script_data_out = run_script(wh_item.stock_calculation_script, {
                                     "cut_width_mm": rm_data.cut_width_mm, "cut_height_mm": rm_data.cut_height_mm,
                                     "quantity": oi.quantity, "width_mm": rm.width_mm, "height_mm": rm.height_mm,
                                     "roll_width_m": rm.roll_width_m, "roll_length_m": rm.roll_length_m,
+                                    "material_name": rm.name,
+                                    "offcuts": offcuts_data,
                                 })
+                                if script_data_out.get("error"):
+                                    raise HTTPException(status_code=400, detail=script_data_out["error"])
+                                if script_data_out.get("new_offcuts"):
+                                    for oc in script_data_out["new_offcuts"]:
+                                        db.add(Offcut(raw_material_id=rm_id, width_mm=oc["width"], height_mm=oc["height"], quantity=1, order_id=order_id))
+                                    db.flush()
+                                if script_data_out.get("offcuts_used"):
+                                    for oc in script_data_out["offcuts_used"]:
+                                        pending_offcuts_delete.append({
+                                            "raw_material_id": rm_id,
+                                            "width_mm": oc["width"],
+                                            "height_mm": oc["height"],
+                                            "remaining_width": oc.get("remaining_width", 0),
+                                            "remaining_height": oc.get("remaining_height", 0)
+                                        })
+                                computed_qty = script_result / oi.quantity if oi.quantity else script_result
+                            except HTTPException:
+                                raise
                             except Exception:
                                 computed_qty = _calc_custom_raw_material_qty(rm, rm_data.cut_width_mm, rm_data.cut_height_mm)
                         else:
@@ -832,11 +1067,51 @@ def update_order(order_id: int, data: OrderUpdate, user: User = Depends(get_curr
 
             if order.status in STATUSES_WITH_STOCK:
                 _deduct_raw_material(new_order_items, db, order_id=order_id)
+            else:
+                _check_stock_sufficiency(new_order_items, db)
 
             order.total_price = round2(total_price)
 
         db.commit()
         db.refresh(order)
+
+        if pending_offcuts_delete:
+            from app.models.offcut import Offcut
+            from app.models.stock_writeoff import StockWriteoff
+            for oc in pending_offcuts_delete:
+                offcut = db.execute(
+                    select(Offcut).where(
+                        Offcut.raw_material_id == oc["raw_material_id"],
+                        Offcut.width_mm == oc["width_mm"],
+                        Offcut.height_mm == oc["height_mm"]
+                    )
+                ).scalar_one_or_none()
+                if offcut:
+                    db.add(StockWriteoff(
+                        item_type="raw_material",
+                        raw_material_id=oc["raw_material_id"],
+                        quantity=1,
+                        reason=f"Использован обрезок {oc['width_mm']}×{oc['height_mm']} мм для заказа #{order.id}",
+                        order_id=order.id,
+                        created_by=user.id,
+                        created_by_name=user.full_name or user.username,
+                        remaining_width=oc.get("remaining_width", 0) if oc.get("remaining_width", 0) > 0 else None,
+                        remaining_height=oc.get("remaining_height", 0) if oc.get("remaining_height", 0) > 0 else None,
+                    ))
+                    # Если есть остаток, создаём новый обрезок
+                    if oc.get("remaining_width", 0) > 0 and oc.get("remaining_height", 0) > 0:
+                        # Проверяем что остаток достаточно большой (больше минимального размера изделия)
+                        min_item_size = 100  # мм, минимальный размер для хранения обрезка
+                        if oc["remaining_width"] > min_item_size and oc["remaining_height"] > min_item_size:
+                            db.add(Offcut(
+                                raw_material_id=oc["raw_material_id"],
+                                width_mm=oc["remaining_width"],
+                                height_mm=oc["remaining_height"],
+                                quantity=1,
+                                order_id=order.id
+                            ))
+                    db.delete(offcut)
+            db.commit()
 
         if changes:
             log_updated(order, changes, user, db)
@@ -922,6 +1197,18 @@ def toggle_item_completed(order_id: int, item_id: int, user: User = Depends(get_
         new_status = None
 
         if all_completed and order.status != "ready":
+            items_without_method = [
+                i for i in all_items
+                if i.raw_material_id and not i.processing_method
+            ]
+            if items_without_method:
+                names = [i.product_name_snapshot or f"#{i.id}" for i in items_without_method]
+                item.is_completed = False
+                db.flush()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Нельзя завершить заказ: не указан способ обработки для позиций: {', '.join(names)}"
+                )
             order.status = "ready"
             new_status = "ready"
         elif any_completed and not all_completed and order.status == "new":
@@ -957,6 +1244,28 @@ def toggle_item_completed(order_id: int, item_id: int, user: User = Depends(get_
             select(Order)
             .options(joinedload(Order.items))
             .where(Order.id == order_id)
+        ).scalars().unique().one()
+        return _enrich_order(order, db)
+    finally:
+        db.close()
+
+
+@router.put("/{order_id}/items/{item_id}/processing-method", response_model=OrderOut)
+def set_processing_method(order_id: int, item_id: int, data: dict, user: User = Depends(get_current_user)):
+    db = SessionFactory()
+    try:
+        order = db.get(Order, order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        item = db.execute(
+            select(OrderItem).where(OrderItem.id == item_id, OrderItem.order_id == order_id)
+        ).scalar_one_or_none()
+        if not item:
+            raise HTTPException(status_code=404, detail="Order item not found")
+        item.processing_method = data.get("processing_method", "")
+        db.commit()
+        order = db.execute(
+            select(Order).options(joinedload(Order.items)).where(Order.id == order_id)
         ).scalars().unique().one()
         return _enrich_order(order, db)
     finally:
@@ -1090,6 +1399,7 @@ def _enrich_order(order: Order, db: Session) -> OrderOut:
             "manual_writeoff_cut_height_mm": oi.manual_writeoff_cut_height_mm,
             "manual_writeoff_quantity": oi.manual_writeoff_quantity,
             "manual_writeoff_raw_material_name": None,
+            "processing_method": getattr(oi, "processing_method", None),
         })
 
     for item in items:
