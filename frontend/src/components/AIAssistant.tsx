@@ -72,7 +72,10 @@ export default function AIAssistant() {
 
   useEffect(() => {
     if (open) {
-      setTimeout(() => inputRef.current?.focus(), 300);
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+        inputRef.current?.focus();
+      }, 300);
     }
   }, [open]);
 

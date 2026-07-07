@@ -31,7 +31,7 @@ export default function SettingsPage() {
         },
         {
           key: "hermes",
-          label: <span><ThunderboltOutlined /> Hermes Agent</span>,
+          label: <span><ThunderboltOutlined /> Telegram bot</span>,
           children: <HermesTab />,
         },
         {

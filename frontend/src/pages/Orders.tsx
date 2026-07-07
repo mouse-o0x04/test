@@ -747,7 +747,7 @@ export default function OrdersPage() {
         title={`Заказ #${detailOrder?.id || ""}`}
         open={!!detailOrder}
         onClose={() => setDetailOrder(null)}
-        width={560}
+        width={800}
         extra={
           detailOrder && (
             <Space>
@@ -772,7 +772,9 @@ export default function OrdersPage() {
                 {detailOrder.deadline ? dayjs(detailOrder.deadline).format("DD.MM.YYYY") : "—"}
               </Descriptions.Item>
               {detailOrder.description && (
-                <Descriptions.Item label="Описание">{detailOrder.description}</Descriptions.Item>
+                <Descriptions.Item label="Описание">
+                  <div style={{ whiteSpace: "pre-line" }}>{detailOrder.description}</div>
+                </Descriptions.Item>
               )}
               {detailOrder.notes && (
                 <Descriptions.Item label="Примечания">{detailOrder.notes}</Descriptions.Item>
@@ -818,7 +820,24 @@ export default function OrdersPage() {
 
             <Divider style={{ margin: "16px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <Typography.Text strong>Продукты</Typography.Text>
+              <Space>
+                <Typography.Text strong>Продукты</Typography.Text>
+                <Tooltip title="Скопировать наименование, количество и цену всех продуктов">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      const lines = detailOrder.items.map((i) => {
+                        const name = i.product_name || `#${i.product_id}`;
+                        const price = canViewPrices ? `\t${i.unit_price}` : "";
+                        return `${name}\t${i.quantity}${price}`;
+                      });
+                      copyToClipboard(lines.join("\n"));
+                    }}
+                  />
+                </Tooltip>
+              </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {detailOrder.items.filter((i) => i.is_completed).length} / {detailOrder.items.length} выполнено
               </Typography.Text>

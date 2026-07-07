@@ -157,10 +157,29 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
     if (!open || editing) return;
     const timeout = setTimeout(() => {
       const values = form.getFieldsValue();
-      saveDraft({ ...values, _step: currentStep });
+      if (values.client_id || (values.items && values.items.length > 0)) {
+        saveDraft({ ...values, _step: currentStep });
+      }
     }, 500);
     return () => clearTimeout(timeout);
   }, [watchedClientId, watchedItems, currentStep, open, editing]);
+
+  const handleClose = () => {
+    if (!editing) {
+      const values = form.getFieldsValue();
+      if (values.client_id || (values.items && values.items.length > 0)) {
+        saveDraft({ ...values, _step: currentStep });
+      }
+    }
+    onClose();
+  };
+
+  const handleCancel = () => {
+    clearDraft();
+    onClose();
+    form.resetFields();
+    setCurrentStep(0);
+  };
 
   const onFinish = (values: Record<string, unknown>) => {
     const v = values;
@@ -262,7 +281,7 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
         )}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <Button onClick={() => { onClose(); form.resetFields(); setCurrentStep(0); }}>Отмена</Button>
+        <Button onClick={handleCancel}>Отмена</Button>
         <Button type="primary" onClick={handleNext} disabled={!canGoNext()} loading={createMutation.isPending || updateMutation.isPending}>
           {currentStep === 3 ? (editing ? "Сохранить" : "Создать заказ") : "Далее"}
         </Button>
@@ -275,7 +294,7 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
       <Drawer
         title={editing ? "Редактировать заказ" : "Новый заказ"}
         open={open}
-        onClose={onClose}
+        onClose={handleClose}
         width="100%"
         height="100%"
         placement="bottom"
@@ -297,7 +316,7 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
     <Modal
       title={editing ? "Редактировать заказ" : "Новый заказ"}
       open={open}
-      onCancel={() => { onClose(); form.resetFields(); setCurrentStep(0); }}
+      onCancel={handleCancel}
       width="90vw"
       style={{ maxWidth: 1400 }}
       footer={footer}

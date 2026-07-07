@@ -188,7 +188,7 @@ export default function HermesPage() {
       <Col span={24}>
         <Space style={{ marginBottom: 16, justifyContent: "space-between", width: "100%" }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            Hermes Agent
+            Telegram bot
           </Typography.Title>
           <Button type="primary" onClick={openCreate}>
             Добавить агента
@@ -250,7 +250,7 @@ export default function HermesPage() {
       )}
 
       <Modal
-        title={editing ? "Редактировать агента" : "Новый агент Hermes"}
+        title={editing ? "Редактировать агента" : "Новый агент Telegram"}
         open={modalOpen}
         onCancel={() => {
           setModalOpen(false);
