@@ -46,7 +46,7 @@ class OrderItem(BaseOrders):
     cut_width_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_height_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    unit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    unit_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     is_printed: Mapped[bool] = mapped_column(Boolean, default=False)
 

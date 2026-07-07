@@ -86,46 +86,50 @@ def calculate(data):
         fits_a = c_w <= ow and c_h <= oh
         fits_b = c_h <= ow and c_w <= oh
         if fits_a:
-            items_x = int(ow // c_w)
-            items_y = int(oh // c_h)
-            items_from_offcut = items_x * items_y
-            # Вычисляем остаток после использования
-            used_width = items_x * c_w
-            remaining_width = ow - used_width
-            remaining_height = oh
-            # Если остаток достаточно большой, сохраняем как новый обрезок
-            if remaining_width > c_w and remaining_height > c_h:
+            cols = int(ow // c_w)
+            rows = int(oh // c_h)
+            items_from_offcut = cols * rows
+            items_used = min(items_from_offcut, remaining)
+            full_rows = items_used // cols
+            last_cols = items_used % cols
+            used_rows = full_rows + (1 if last_cols > 0 else 0)
+            oc_rem_w = ow
+            oc_rem_h = oh - used_rows * c_h
+            if oc_rem_h >= c_h:
                 offcuts_used.append({
                     "width": ow, "height": oh,
-                    "items_used": min(items_from_offcut, remaining),
-                    "remaining_width": remaining_width,
-                    "remaining_height": remaining_height
+                    "items_used": items_used,
+                    "remaining_width": oc_rem_w,
+                    "remaining_height": oc_rem_h
                 })
             else:
                 offcuts_used.append({
                     "width": ow, "height": oh,
-                    "items_used": min(items_from_offcut, remaining),
+                    "items_used": items_used,
                     "remaining_width": 0,
                     "remaining_height": 0
                 })
         elif fits_b:
-            items_x = int(ow // c_h)
-            items_y = int(oh // c_w)
-            items_from_offcut = items_x * items_y
-            used_width = items_x * c_h
-            remaining_width = ow - used_width
-            remaining_height = oh
-            if remaining_width > c_h and remaining_height > c_w:
+            cols = int(ow // c_h)
+            rows = int(oh // c_w)
+            items_from_offcut = cols * rows
+            items_used = min(items_from_offcut, remaining)
+            full_rows = items_used // cols
+            last_cols = items_used % cols
+            used_rows = full_rows + (1 if last_cols > 0 else 0)
+            oc_rem_w = ow
+            oc_rem_h = oh - used_rows * c_w
+            if oc_rem_h >= c_w:
                 offcuts_used.append({
                     "width": ow, "height": oh,
-                    "items_used": min(items_from_offcut, remaining),
-                    "remaining_width": remaining_width,
-                    "remaining_height": remaining_height
+                    "items_used": items_used,
+                    "remaining_width": oc_rem_w,
+                    "remaining_height": oc_rem_h
                 })
             else:
                 offcuts_used.append({
                     "width": ow, "height": oh,
-                    "items_used": min(items_from_offcut, remaining),
+                    "items_used": items_used,
                     "remaining_width": 0,
                     "remaining_height": 0
                 })
@@ -142,16 +146,17 @@ def calculate(data):
         used_full_sheets += sheets_needed
         remaining = 0
 
-    # ОБРЕЗКИ после деления листа на заготовки
+    # ОБРЕЗКИ после деления листа на заготовки (только если использовали листы)
     new_offcuts = []
-    if rem_w > 0 and blank_h > 0:
-        new_offcuts.append({"width": rem_w, "height": blank_h * blanks_y})
-    if rem_h > 0 and blank_w > 0:
-        new_offcuts.append({"width": blank_w * blanks_x, "height": rem_h})
+    if used_full_sheets > 0:
+        if rem_w > 0 and blank_h > 0:
+            new_offcuts.append({"width": rem_w, "height": blank_h * blanks_y})
+        if rem_h > 0 and blank_w > 0:
+            new_offcuts.append({"width": blank_w * blanks_x, "height": rem_h})
 
     return {
         "sheets_to_write_off": used_full_sheets,
-        "offcuts_used": used_offcuts,
+        "offcuts_used": offcuts_used,
         "new_offcuts": new_offcuts,
         "items_per_blank": items_per_blank,
     }

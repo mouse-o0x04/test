@@ -1,5 +1,8 @@
 def calculate(data):
-    """Расход листового материала.
+    """Расход листового материала (бумага).
+
+    Округление вверх до половины листа — на складе учитываются
+    только целые листы (1) или половинки (0.5).
 
     data:
         cut_width_mm: ширина отреза, мм
@@ -23,8 +26,10 @@ def calculate(data):
     fit = max(fit_a, fit_b)
     if fit < 1:
         return 0
-    per_piece = 1.0 / fit
-    return round(per_piece * qty, 6)
+
+    raw = (1.0 / fit) * qty
+    half_sheets = math.ceil(raw * 2)
+    return half_sheets / 2
 
 
 def format(data):
