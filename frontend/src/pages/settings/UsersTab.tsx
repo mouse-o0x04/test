@@ -1,4 +1,4 @@
-import { PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Button,
   Form,
@@ -10,6 +10,8 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
+  Typography,
   message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -80,12 +82,16 @@ export default function UsersTab() {
       render: (v: boolean) => <Tag color={v ? "green" : "red"}>{v ? "активен" : "заблокирован"}</Tag>,
     },
     {
-      title: "", key: "actions", width: 140,
+      title: "Действия", key: "actions", width: 90,
       render: (_: unknown, record: User) => (
         <Space>
-          <Button type="link" size="small" onClick={() => openEdit(record)}>Ред.</Button>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
           <Popconfirm title="Удалить?" onConfirm={() => deleteMutation.mutate(record.id)}>
-            <Button type="link" size="small" danger>Удал.</Button>
+            <Tooltip title="Удалить">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),

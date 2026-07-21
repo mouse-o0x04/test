@@ -1,0 +1,11 @@
+
+> printing-crm-frontend@1.0.0 dev
+> vite --host 0.0.0.0
+
+
+  VITE v5.4.21  ready in 542 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.1.118:5173/
+  ➜  Network: http://172.18.0.1:5173/
+  ➜  Network: http://198.18.0.1:5173/

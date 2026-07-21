@@ -470,6 +470,11 @@ body {
 .ant-table-wrapper .ant-table-thead > tr > th { background: var(--nc-bg-secondary) !important; font-weight: 500; font-size: 12px; }
 .ant-table-wrapper { width: 100%; overflow-x: auto; }
 
+/* ID column: shrink to text width */
+.nc-col-id.ant-table-cell { padding-inline: 3px !important; }
+.nc-col-id .ant-table-column-sorters { padding-inline: 3px !important; margin-inline: 0 !important; }
+.nc-col-id .ant-table-column-sorter { margin-inline-start: 2px !important; }
+
 /* Ensure cards fill width */
 .nc-content .ant-card { width: 100%; }
 .nc-content .ant-row { width: 100%; }

@@ -38,7 +38,7 @@ function SortableProductRow({ field, form, index, products, rawMaterials, canVie
   field: { name: number; key: number };
   form: FormInstance;
   index: number;
-  products: { id: number; name: string; unit_price: number; unit_type: string }[] | undefined;
+  products: { id: number; name: string; unit_price: number; unit_type: string; raw_materials?: any[]; has_components?: boolean }[] | undefined;
   rawMaterials: { id: number; name: string }[] | undefined;
   canViewPrices: boolean;
   onRemove: () => void;
@@ -53,6 +53,10 @@ function SortableProductRow({ field, form, index, products, rawMaterials, canVie
   };
 
   const itemMode: string = Form.useWatch(["items", field.name, "_itemMode"], form) || "catalog";
+  const productId: number | undefined = Form.useWatch(["items", field.name, "product_id"], form);
+  const qty: number = Form.useWatch(["items", field.name, "quantity"], form) || 1;
+  const selectedProduct = products?.find((p) => p.id === productId);
+  const components = selectedProduct?.raw_materials || [];
 
   return (
     <div ref={setNodeRef} style={{ ...style, padding: "8px 12px", background: "#fff", borderRadius: 6, border: "1px solid #f0f0f0", marginBottom: 8 }}>
@@ -110,11 +114,19 @@ function SortableProductRow({ field, form, index, products, rawMaterials, canVie
         )}
 
         {canViewPrices && itemMode === "catalog" && (
+          <Form.Item name={[field.name, "unit_price"]} style={{ width: 100, marginBottom: 0 }} tooltip="Цена для этого заказа (каталог не меняется)">
+            <InputNumber min={0} size="small" style={{ width: "100%" }} placeholder="из каталога" />
+          </Form.Item>
+        )}
+
+        {canViewPrices && itemMode === "catalog" && (
           <Typography.Text type="secondary" style={{ fontSize: 12, width: 60, textAlign: "right", flexShrink: 0 }}>
             {(() => {
+              const formPrice = form.getFieldValue(["items", field.name, "unit_price"]);
               const p = products?.find((p) => p.id === form.getFieldValue(["items", field.name, "product_id"]));
               const qty = form.getFieldValue(["items", field.name, "quantity"]) || 0;
-              return p ? `${(p.unit_price * qty).toLocaleString()} ₽` : "";
+              const price = formPrice || p?.unit_price || 0;
+              return p || formPrice ? `${(price * qty).toLocaleString()} ₽` : "";
             })()}
           </Typography.Text>
         )}
@@ -144,6 +156,22 @@ function SortableProductRow({ field, form, index, products, rawMaterials, canVie
               <Select.Option value="Ручная резка">Ручная</Select.Option>
             </Select>
           </Form.Item>
+        </div>
+      )}
+
+      {itemMode === "catalog" && components.length > 0 && (
+        <div style={{ marginTop: 6, paddingLeft: 24, fontSize: 12, color: "#8c8c8c" }}>
+          <Typography.Text type="secondary" style={{ fontSize: 11, fontWeight: 500 }}>Состав:</Typography.Text>
+          {components.filter((c: any) => c.component_product_id).map((c: any, ci: number) => {
+            const compName = c.component_product_name || c.name || `#${c.component_product_id}`;
+            const compTotal = c.quantity_per_unit ? c.quantity_per_unit * qty : qty;
+            return (
+              <div key={ci} style={{ marginTop: 2 }}>
+                ↳ {compName} × {compTotal}
+                {c.cut_width_mm && c.cut_height_mm ? ` (${c.cut_width_mm}×${c.cut_height_mm}мм)` : ""}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

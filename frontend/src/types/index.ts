@@ -56,11 +56,20 @@ export interface CompanyDetailFormData {
 }
 
 export interface ProductRawMaterialItem {
-  raw_material_id: number;
+  raw_material_id?: number | null;
+  component_product_id?: number | null;
   coefficient: number;
+  name?: string;
+  cut_width_mm?: number;
+  cut_height_mm?: number;
+  quantity_per_unit?: number;
+  price_per_unit?: number;
+  sort_order?: number;
   raw_material_name?: string;
   raw_material_width_mm?: number;
   raw_material_height_mm?: number;
+  component_product_name?: string;
+  component_product_unit_type?: string;
 }
 
 export interface Product {
@@ -80,6 +89,8 @@ export interface Product {
   raw_materials?: ProductRawMaterialItem[];
   default_cut_width_mm?: number;
   default_cut_height_mm?: number;
+  auto_unit_price?: number | null;
+  has_components?: boolean;
 }
 
 export interface ProductFormData {
@@ -99,11 +110,16 @@ export interface ProductFormData {
 }
 
 export interface OrderItemRawMaterial {
-  raw_material_id: number;
+  raw_material_id?: number | null;
+  component_product_id?: number | null;
   raw_material_qty?: number;
   cut_width_mm?: number;
   cut_height_mm?: number;
   raw_material_name?: string;
+  component_product_name?: string;
+  name?: string;
+  quantity?: number;
+  unit_price?: number;
 }
 
 export interface OrderItem {
@@ -140,7 +156,7 @@ export interface OrderItemFormData {
   raw_material_qty?: number;
   cut_width_mm?: number;
   cut_height_mm?: number;
-  raw_materials?: { raw_material_id: number; raw_material_qty?: number; cut_width_mm?: number; cut_height_mm?: number }[];
+  raw_materials?: { raw_material_id?: number | null; component_product_id?: number | null; raw_material_qty?: number; cut_width_mm?: number; cut_height_mm?: number; name?: string; quantity?: number; unit_price?: number }[];
   quantity: number;
   unit_price?: number;
   processing_method?: string;
@@ -159,6 +175,7 @@ export interface Order {
   description?: string;
   notes?: string;
   deadline?: string;
+  deadline_start?: string;
   designer?: string;
   workers?: string[];
   layout_type?: string;
@@ -170,16 +187,19 @@ export interface Order {
   created_at: string;
   updated_at: string;
   client_name?: string;
+  clients?: { id: number; name: string }[];
   items: OrderItem[];
   progress: number;
 }
 
 export interface OrderFormData {
   client_id: number;
+  client_ids?: number[];
   status?: string;
   description?: string;
   notes?: string;
   deadline?: string;
+  deadline_start?: string;
   designer?: string;
   workers?: string[];
   layout_type?: string;
@@ -239,7 +259,22 @@ export interface WarehouseItem {
   raw_material_name?: string;
   raw_material_unit_type?: string;
   raw_material_roll_length_m?: number;
+  raw_material_width_mm?: number;
+  raw_material_height_mm?: number;
+  source_raw_material_name?: string;
+  source_raw_material_quantity?: number;
+  components?: WarehouseComponent[];
   pending_writeoffs_count?: number;
+}
+
+export interface WarehouseComponent {
+  name?: string;
+  raw_material_id?: number | null;
+  component_product_id?: number | null;
+  cut_width_mm?: number;
+  cut_height_mm?: number;
+  quantity_per_unit?: number;
+  stock_quantity?: number;
 }
 
 export interface WarehouseFormData {
@@ -263,6 +298,7 @@ export interface StockInfo {
 export const ORDER_STATUSES = [
   "new",
   "in_progress",
+  "post_processing",
   "ready",
   "delivered",
 ] as const;

@@ -1,7 +1,9 @@
-import { AppstoreOutlined, CalculatorOutlined, PlusOutlined, UnorderedListOutlined, DeleteOutlined, LinkOutlined, ClockCircleOutlined, MinusCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, BlockOutlined, BorderOuterOutlined, CalculatorOutlined, DollarOutlined, PlusOutlined, UnorderedListOutlined, DeleteOutlined, EditOutlined, LinkOutlined, ClockCircleOutlined, MinusCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import {
+  AutoComplete,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Divider,
@@ -23,16 +25,19 @@ import {
   message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createProduct, deleteProduct, getProducts, updateProduct, bulkDeleteProducts } from "../api/products";
-import { getScripts } from "../api/scripts";
 import { getRawMaterials } from "../api/rawMaterials";
+import { getScripts } from "../api/scripts";
 import CalculatorModal from "../components/CalculatorModal";
 import AuditLogDrawer from "../components/AuditLogDrawer";
 import { textFilter, numberFilter, selectFilter } from "../components/TableFilters";
 import { useAuth } from "../hooks/useAuth";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { useTablePagination } from "../hooks/useTablePagination";
 import { useEntityFilters } from "../hooks/useEntityFilters";
 import { useViewMode } from "../hooks/useViewMode";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import type { Product, ProductFormData } from "../types";
 import { toSortOrder } from "../utils/sort";
 
@@ -48,18 +53,62 @@ export default function ProductsPage() {
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditEntity, setAuditEntity] = useState<{ entityType: string; entityId: number; entityName?: string } | null>(null);
   const [calcModalOpen, setCalcModalOpen] = useState(false);
+  const [nestedProductModalOpen, setNestedProductModalOpen] = useState(false);
+  const nestedProductCallbackRef = useRef<((p: Product) => void) | null>(null);
+  const [nestedProductName, setNestedProductName] = useState<string>("");
+  const [nestedForm] = Form.useForm();
+  useEffect(() => {
+    if (nestedProductModalOpen && nestedProductName) {
+      nestedForm.setFieldsValue({ name: nestedProductName });
+    }
+  }, [nestedProductModalOpen, nestedProductName, nestedForm]);
+
+  const handleCreateNested = (fieldName: number, currentInputName: string) => {
+    nestedProductCallbackRef.current = (newProd: Product) => {
+      form.setFieldValue(["raw_materials", fieldName, "component_product_id"], newProd.id);
+    };
+    setNestedProductName(currentInputName || "");
+    setNestedProductModalOpen(true);
+  };
   const entityFilters = useEntityFilters("products");
+  const { widths, setWidth } = useColumnState("products");
   const { user, hasPermission } = useAuth();
   const canViewPrices = hasPermission("prices.view");
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [showSizes, setShowSizes] = useState(false);
+  const { paginationConfig, onPaginationChange } = useTablePagination();
 
   const { data: products, isLoading } = useQuery({ queryKey: ["products"], queryFn: getProducts });
   const { data: scripts } = useQuery({ queryKey: ["scripts"], queryFn: getScripts });
   const { data: rawMaterials } = useQuery({ queryKey: ["rawMaterials"], queryFn: getRawMaterials });
 
   const createMutation = useMutation({
+    mutationKey: ["createProduct"],
     mutationFn: createProduct,
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["products"] }); message.success("Продукт создан"); setModalOpen(false); form.resetFields(); },
+  });
+
+  const nestedCreateMutation = useMutation({
+    mutationKey: ["createNestedProduct"],
+    mutationFn: createProduct,
+    onSuccess: (newProd: Product) => {
+      if (!newProd || !newProd.id) {
+        message.error("Сервер вернул некорректный ответ при создании продукта");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      message.success(`Под-продукт «${newProd.name}» создан (ID: ${newProd.id})`);
+      try {
+        nestedProductCallbackRef.current?.(newProd);
+        nestedProductCallbackRef.current = null;
+      } catch (e) {
+        console.error("nested callback error:", e);
+      }
+      setNestedProductModalOpen(false);
+      setNestedProductName("");
+      nestedForm.resetFields();
+    },
+    onError: (err: any) => message.error(err?.response?.data?.detail || "Не удалось создать под-продукт"),
   });
 
   const updateMutation = useMutation({
@@ -78,29 +127,66 @@ export default function ProductsPage() {
     onError: () => message.error("Ошибка удаления"),
   });
 
-  const openCreate = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
+  const openCreate = () => { setEditing(null); form.resetFields(); setShowSizes(false); setModalOpen(true); };
   const openEdit = (product: Product) => {
     setEditing(product);
     const materials = product.raw_materials?.length
-      ? product.raw_materials.map(m => ({ raw_material_id: m.raw_material_id, coefficient: m.coefficient }))
-      : product.raw_material_id ? [{ raw_material_id: product.raw_material_id, coefficient: product.material_coefficient }] : [];
+      ? product.raw_materials.map(m => ({
+            raw_material_id: m.raw_material_id ?? undefined,
+            component_product_id: m.component_product_id ?? undefined,
+            coefficient: m.coefficient,
+            name: m.component_product_name || m.name,
+            cut_width_mm: m.cut_width_mm,
+            cut_height_mm: m.cut_height_mm,
+            quantity_per_unit: m.quantity_per_unit || 1,
+            price_per_unit: m.price_per_unit,
+            sort_order: m.sort_order,
+          }))
+      : product.raw_material_id ? [{ raw_material_id: product.raw_material_id, coefficient: product.material_coefficient, quantity_per_unit: 1 }] : [];
+    setShowSizes(!!materials.some((m: any) => m.cut_width_mm || m.cut_height_mm));
     form.setFieldsValue({ ...product, raw_materials: materials });
     setModalOpen(true);
   };
 
   const onFinish = (values: ProductFormData) => {
     const materials = (values as any).raw_materials;
-    const payload = { ...values };
+    const rawMaterialId = (values as any).raw_material_id;
+    const payload = { ...values } as any;
+
     if (materials && materials.length > 0) {
-      (payload as any).raw_materials = materials.map((m: any) => ({
-        raw_material_id: m.raw_material_id,
+      // Composite product — components are sub-products
+      for (const m of materials) {
+        if (!m.component_product_id) {
+          message.error("Каждый компонент должен быть привязан к продукту. Выберите продукт из списка или создайте новый.");
+          return;
+        }
+      }
+      payload.raw_materials = materials.map((m: any, idx: number) => ({
+        raw_material_id: null,
+        component_product_id: m.component_product_id || null,
         coefficient: m.coefficient || 1,
+        name: m.name || undefined,
+        cut_width_mm: showSizes ? (m.cut_width_mm || undefined) : undefined,
+        cut_height_mm: showSizes ? (m.cut_height_mm || undefined) : undefined,
+        quantity_per_unit: m.quantity_per_unit || 1,
+        price_per_unit: m.price_per_unit || undefined,
+        sort_order: idx,
       }));
-      // keep legacy fields for backward compat
-      payload.raw_material_id = materials[0].raw_material_id;
-      payload.material_coefficient = materials[0].coefficient || 1;
+    } else if (rawMaterialId) {
+      // Simple product — produced from raw material
+      payload.raw_materials = [{
+        raw_material_id: rawMaterialId,
+        component_product_id: null,
+        coefficient: (values as any).material_coefficient || 1,
+        name: undefined,
+        cut_width_mm: undefined,
+        cut_height_mm: undefined,
+        quantity_per_unit: 1,
+        price_per_unit: undefined,
+        sort_order: 0,
+      }];
     } else {
-      (payload as any).raw_materials = [];
+      payload.raw_materials = [];
     }
     if (editing) { updateMutation.mutate({ id: editing.id, data: payload }); }
     else { createMutation.mutate(payload); }
@@ -128,7 +214,7 @@ export default function ProductsPage() {
   const unitTypes = [...new Set((products ?? []).map((p) => p.unit_type))];
   const categories = [...new Set((products ?? []).map((p) => p.category).filter(Boolean))];
 
-  const columns = [
+  const baseColumns = [
     { title: "ID", dataIndex: "id", key: "id", width: 60, sorter: (a: Product, b: Product) => a.id - b.id, sortOrder: toSortOrder(entityFilters.sortField, "id", entityFilters.sortDirection) },
     { title: "Название", dataIndex: "name", key: "name", ...textFilter<Product>("name"), sorter: (a: Product, b: Product) => a.name.localeCompare(b.name), filteredValue: entityFilters.filters["name"] as string[] | null, sortOrder: toSortOrder(entityFilters.sortField, "name", entityFilters.sortDirection) },
     { title: "Категория", dataIndex: "category", key: "category", ...textFilter<Product>("category"), filters: categories.map((c) => ({ text: c!, value: c! })), onFilter: (v: unknown, r: Product) => r.category === v, filteredValue: entityFilters.filters["category"] as string[] | null },
@@ -152,15 +238,19 @@ export default function ProductsPage() {
       ) : null,
     },
     {
-      title: "Действия", key: "actions",
+      title: "Действия", key: "actions", width: 120,
       render: (_: unknown, record: Product) => (
         <Space>
-          <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={(e) => { e.stopPropagation(); setAuditEntity({ entityType: "product", entityId: record.id, entityName: record.name }); setAuditOpen(true); }}>
-            История
-          </Button>
-          <Button type="link" onClick={() => openEdit(record)}>Редактировать</Button>
+          <Tooltip title="История">
+            <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={(e) => { e.stopPropagation(); setAuditEntity({ entityType: "product", entityId: record.id, entityName: record.name }); setAuditOpen(true); }} />
+          </Tooltip>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
           <Popconfirm title="Удалить продукт?" onConfirm={() => deleteMutation.mutate(record.id)}>
-            <Button type="link" danger>Удалить</Button>
+            <Tooltip title="Удалить">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -172,6 +262,8 @@ export default function ProductsPage() {
     if (p.formula) return <Tag color="purple">{p.formula}</Tag>;
     return <Tag>фиксированная</Tag>;
   };
+
+  const columns = useMemo(() => applyColumnWidths(baseColumns, widths, setWidth), [baseColumns, widths, setWidth]);
 
   return (
     <>
@@ -200,13 +292,14 @@ export default function ProductsPage() {
       </div>
 
       {viewMode === "table" ? (
-        <Table dataSource={filteredData} columns={columns} rowKey="id" loading={isLoading} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `Всего: ${t}` }} size="small" rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}           onRow={(record) => ({
+        <Table dataSource={filteredData} columns={columns} components={{ header: { cell: ResizableHeaderCell } }} rowKey="id" loading={isLoading} pagination={paginationConfig} size="small" rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}           onRow={(record) => ({
             onClick: (e) => {
               if ((e.target as HTMLElement).closest("button, .ant-btn, .ant-popconfirm, .ant-popover")) return;
               setDetailProduct(record);
             },
             style: { cursor: "pointer" },
-          })} onChange={(_pagination, filters, sorter) => {
+          })} onChange={(pagination, filters, sorter) => {
+          onPaginationChange(pagination);
           entityFilters.updateFilters(filters as Record<string, unknown>);
           const s = Array.isArray(sorter) ? sorter[0] : sorter;
           if (s && s.columnKey && s.order) {
@@ -256,104 +349,309 @@ export default function ProductsPage() {
         </Spin>
       )}
 
-      <Modal title={editing ? "Редактировать продукт" : "Новый продукт"} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.validateFields().then(onFinish).catch(() => {})} confirmLoading={createMutation.isPending || updateMutation.isPending}>
+      <Modal
+        title={editing ? "Редактировать продукт" : "Новый продукт"}
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={() => form.validateFields().then(onFinish).catch(() => {})}
+        confirmLoading={createMutation.isPending || updateMutation.isPending}
+        width={1100}
+        className="product-modal"
+        okText="Сохранить"
+        cancelText="Отмена"
+      >
         <Form form={form} layout="vertical" onFinish={onFinish}>
-          <Form.Item name="name" label="Название" rules={[{ required: true }]}><Input /></Form.Item>
+
+          {/* Row 1: 2-column grid */}
+          <div className="product-form-grid">
+
+            {/* Card: Основная информация + Размеры */}
+            <Card size="small" title={<><AppstoreOutlined /> Основная информация</>} style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={14}>
+                  <Form.Item name="name" label="Название" rules={[{ required: true }]}>
+                    <Input placeholder="Введите название продукта" />
+                  </Form.Item>
+                </Col>
+                <Col span={10}>
+                  <Form.Item name="category" label="Категория">
+                    <Input placeholder="Введите категорию" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="description" label="Описание">
+                <Input.TextArea rows={3} placeholder="Опишите продукт, его характеристики и особенности" />
+              </Form.Item>
+
+              {/* Сырьё — для простых продуктов, производимых из сырья */}
+              <Form.Item
+                name="raw_material_id"
+                label="Сырьё"
+                tooltip="Выберите сырьё, если продукт производится напрямую из него (без под-продуктов). Для составных продуктов используйте секцию «Компоненты» ниже."
+              >
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="Не выбрано (продукт без сырья или составной)"
+                  notFoundContent="Сырьё не найдено"
+                >
+                  {(rawMaterials ?? []).map((rm) => (
+                    <Select.Option key={rm.id} value={rm.id} label={rm.name}>
+                      {rm.name} {rm.width_mm && rm.height_mm ? `(${rm.width_mm}×${rm.height_mm} мм)` : ""}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+
+              {/* Размеры */}
+              <div className="form-divider">
+                <div className="form-divider-title"><BorderOuterOutlined /> Размеры изделия</div>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item name="default_cut_width_mm" label="Ширина, мм" tooltip="Ширина по умолчанию при заказе">
+                      <InputNumber min={0} step={1} placeholder="0" style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="default_cut_height_mm" label="Высота, мм" tooltip="Высота по умолчанию при заказе">
+                      <InputNumber min={0} step={1} placeholder="0" style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              </div>
+            </Card>
+
+            {/* Card: Расчёт цены и единицы */}
+            <Card size="small" title={<><CalculatorOutlined /> Расчёт цены и единицы</>} style={{ marginBottom: 16 }}>
+              {canViewPrices && (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item name="formula" label="Формула расчёта" tooltip="Доступные переменные: quantity, unit_price. Пример: quantity * unit_price * 1.2" extra="Если пусто — unit_price × quantity">
+                      <Input placeholder="quantity * unit_price" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="formula_script" label="Скрипт расчёта" tooltip="Скрипт имеет приоритет над формулой">
+                      <Select allowClear placeholder="Не использовать">
+                        {(scripts ?? []).map((s) => (<Select.Option key={s.name} value={s.name}>{s.name}</Select.Option>))}
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )}
+
+              {/* Цена */}
+              <div className="form-divider">
+                <div className="form-divider-title"><DollarOutlined /> Цена</div>
+                <Row gutter={16}>
+                  <Col span={10}>
+                    <Form.Item name="unit_type" label="Единица измерения" rules={[{ required: true }]}>
+                      <Select>
+                        <Select.Option value="piece">шт.</Select.Option>
+                        <Select.Option value="sheet">лист</Select.Option>
+                        <Select.Option value="m2">м²</Select.Option>
+                        <Select.Option value="roll">рулон</Select.Option>
+                        <Select.Option value="set">комплект</Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={14}>
+                    {canViewPrices && (
+                      <Form.Item
+                        name="unit_price"
+                        label={
+                          <Space>
+                            <span>Цена за единицу</span>
+                            <Tooltip title="Рассчитать цену через калькулятор типографии">
+                              <Button type="link" size="small" icon={<CalculatorOutlined />} onClick={() => setCalcModalOpen(true)} style={{ padding: 0, fontSize: 12 }}>
+                                Калькулятор
+                              </Button>
+                            </Tooltip>
+                          </Space>
+                        }
+                        rules={[{ required: true }]}
+                      >
+                        <InputNumber style={{ width: "100%" }} min={0} prefix="₽" placeholder="0.00" />
+                      </Form.Item>
+                    )}
+                  </Col>
+                </Row>
+              </div>
+            </Card>
+          </div>
+
+          {/* Row 2: Компоненты (full width) */}
+          <Card size="small" title={<><BlockOutlined /> Компоненты</>} style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 12 }}>
+              <Checkbox checked={showSizes} onChange={(e) => setShowSizes(e.target.checked)}>
+                Свои размеры
+              </Checkbox>
+            </div>
+            <div className="comp-table-wrapper">
+              <Form.List name="raw_materials">
+                {(fields, { add, remove }) => (
+                  <>
+                    <table className="comp-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 32 }}>№</th>
+                          <th>Компонент</th>
+                          {showSizes && <th style={{ width: 90 }}>Ширина, мм</th>}
+                          {showSizes && <th style={{ width: 90 }}>Высота, мм</th>}
+                          <th style={{ width: 80 }}>Кол-во</th>
+                          <th style={{ width: 100 }}>Цена, ₽</th>
+                          <th style={{ width: 40 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fields.map((field, index) => (
+                          <tr key={field.key}>
+                            <td style={{ color: "#8C8C8C" }}>{index + 1}</td>
+                            <td>
+                              <Form.Item
+                                {...field}
+                                name={[field.name, "name"]}
+                                noStyle
+                                rules={[{ required: true, message: "Выберите продукт" }]}
+                              >
+                                <AutoComplete
+                                  size="small"
+                                  style={{ width: "100%" }}
+                                  placeholder="Поиск продукта (или создать новый)"
+                                  filterOption={(input, option) => (String(option?.value ?? "").toLowerCase()).includes(input.toLowerCase())}
+                                  options={[
+                                    ...(products ?? [])
+                                      .filter((p) => p.id !== editing?.id)
+                                      .map((p) => ({ value: p.name, label: `${p.name}${p.has_components ? " [составной]" : ""}`, product: p })),
+                                  ]}
+                                  onSelect={(val: string, opt: any) => {
+                                    if (opt && opt.product) {
+                                      form.setFieldValue(["raw_materials", field.name, "component_product_id"], opt.product.id);
+                                      form.setFieldValue(["raw_materials", field.name, "name"], opt.product.name);
+                                      const price = opt.product.auto_unit_price != null ? opt.product.auto_unit_price : opt.product.unit_price;
+                                      form.setFieldValue(["raw_materials", field.name, "price_per_unit"], price);
+                                    }
+                                  }}
+                                  onChange={(val: string) => {
+                                    if (!val || !products?.find((p) => p.name === val)) {
+                                      form.setFieldValue(["raw_materials", field.name, "component_product_id"], null);
+                                    }
+                                  }}
+                                >
+                                  <Input size="small" suffix={
+                                    <Tooltip title="Создать новый продукт">
+                                      <PlusOutlined
+                                        onClick={() => {
+                                          const currentName = form.getFieldValue(["raw_materials", field.name, "name"]) || "";
+                                          handleCreateNested(field.name, typeof currentName === "string" ? currentName : "");
+                                        }}
+                                        style={{ color: "#4F7CFF", cursor: "pointer", fontSize: 12 }}
+                                      />
+                                    </Tooltip>
+                                  } />
+                                </AutoComplete>
+                              </Form.Item>
+                            </td>
+                            {showSizes && (
+                              <>
+                                <td>
+                                  <Form.Item {...field} name={[field.name, "cut_width_mm"]} noStyle>
+                                    <InputNumber min={0} step={1} placeholder="мм" size="small" style={{ width: "100%" }} />
+                                  </Form.Item>
+                                </td>
+                                <td>
+                                  <Form.Item {...field} name={[field.name, "cut_height_mm"]} noStyle>
+                                    <InputNumber min={0} step={1} placeholder="мм" size="small" style={{ width: "100%" }} />
+                                  </Form.Item>
+                                </td>
+                              </>
+                            )}
+                            <td>
+                              <Form.Item {...field} name={[field.name, "quantity_per_unit"]} noStyle>
+                                <InputNumber min={1} step={1} placeholder="1" size="small" style={{ width: "100%" }} />
+                              </Form.Item>
+                            </td>
+                            <td>
+                              <Form.Item {...field} name={[field.name, "price_per_unit"]} noStyle>
+                                <InputNumber min={0} step={1} placeholder="авто" size="small" style={{ width: "100%" }} />
+                              </Form.Item>
+                            </td>
+                            <td>
+                              <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <Button
+                      type="dashed"
+                      onClick={() => add({ coefficient: 1, quantity_per_unit: 1 })}
+                      block
+                      icon={<PlusOutlined />}
+                      style={{ marginTop: 12, borderColor: "#D9DDEB", borderRadius: 10, height: 44 }}
+                    >
+                      Добавить компонент
+                    </Button>
+                  </>
+                )}
+              </Form.List>
+            </div>
+          </Card>
+
+          {/* Row 3: Ссылка на товар */}
+          <Card size="small" title={<><LinkOutlined /> Ссылка на товар</>}>
+            <Form.Item name="supplier_url" tooltip="URL страницы товара у поставщика" style={{ marginBottom: 0 }}>
+              <Input placeholder="https://..." prefix={<LinkOutlined />} />
+            </Form.Item>
+          </Card>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый под-продукт"
+        open={nestedProductModalOpen}
+        onCancel={() => { setNestedProductModalOpen(false); nestedProductCallbackRef.current = null; setNestedProductName(""); }}
+        onOk={() => {
+          nestedForm.validateFields().then((vals) => {
+            const payload = {
+              name: vals.name,
+              unit_price: vals.unit_price ?? 0,
+              unit_type: vals.unit_type || "piece",
+              description: vals.description,
+              category: vals.category,
+              raw_materials: [],
+            };
+            nestedCreateMutation.mutate(payload as any);
+          }).catch(() => {});
+        }}
+        confirmLoading={nestedCreateMutation.isPending}
+        width={520}
+      >
+        <Form form={nestedForm} layout="vertical" initialValues={{ unit_type: "piece", unit_price: 0 }}>
+          <Form.Item name="name" label="Название" rules={[{ required: true }]}>
+            <Input placeholder="Например: Карман 100×50" />
+          </Form.Item>
           <Form.Item name="description" label="Описание"><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="category" label="Категория"><Input /></Form.Item>
-          {canViewPrices && <Form.Item name="unit_price" label={
-            <Space>
-              <span>Цена за единицу</span>
-              <Tooltip title="Рассчитать цену через калькулятор типографии">
-                <Button type="link" size="small" icon={<CalculatorOutlined />} onClick={() => setCalcModalOpen(true)} style={{ padding: 0, fontSize: 12 }}>
-                  Калькулятор
-                </Button>
-              </Tooltip>
-            </Space>
-          } rules={[{ required: true }]}><InputNumber style={{ width: "100%" }} min={0} prefix="₽" /></Form.Item>}
-          <Form.Item name="unit_type" label="Единица измерения" rules={[{ required: true }]}>
-            <Select>
-              <Select.Option value="piece">шт.</Select.Option>
-              <Select.Option value="sheet">лист</Select.Option>
-              <Select.Option value="m2">м²</Select.Option>
-              <Select.Option value="roll">рулон</Select.Option>
-              <Select.Option value="set">комплект</Select.Option>
-            </Select>
-          </Form.Item>
-          {canViewPrices && <Form.Item name="formula" label="Формула расчёта цены" tooltip="Доступные переменные: quantity, unit_price. Пример: quantity * unit_price * 1.2" extra="Если не указана, цена = unit_price * quantity">
-            <Input placeholder="quantity * unit_price" />
-          </Form.Item>}
-          {canViewPrices && <Form.Item name="formula_script" label="Скрипт расчёта цены" tooltip="Выберите скрипт из настроек. Скрипт имеет приоритет над формулой.">
-            <Select allowClear placeholder="Не использовать">
-              {(scripts ?? []).map((s) => (<Select.Option key={s.name} value={s.name}>{s.name}</Select.Option>))}
-            </Select>
-          </Form.Item>}
-          <Divider orientation="left" orientationMargin={0} style={{ fontSize: 12, marginTop: 0 }}>Сырьё</Divider>
-          <Form.List name="raw_materials">
-            {(fields, { add, remove }) => (
-              <>
-                {fields.map((field, index) => (
-                  <Row key={field.key} gutter={8} align="middle" style={{ marginBottom: 4 }}>
-                    <Col flex="auto">
-                      <Form.Item
-                        {...field}
-                        name={[field.name, "raw_material_id"]}
-                        noStyle
-                        rules={[{ required: true, message: "Выберите материал" }]}
-                      >
-                        <Select placeholder="Материал-сырьё" showSearch optionFilterProp="label" style={{ width: "100%" }}>
-                          {(rawMaterials ?? []).map((rm) => (
-                            <Select.Option key={rm.id} value={rm.id} label={rm.name}>
-                              {rm.name} {rm.width_mm && rm.height_mm ? `(${rm.width_mm}×${rm.height_mm} мм)` : ""}
-                            </Select.Option>
-                          ))}
-                        </Select>
-                      </Form.Item>
-                    </Col>
-                    <Col span={6}>
-                      <div style={{ marginBottom: 4 }}>
-                        <span style={{ fontSize: 12, color: "#666" }}>Коэфф. <Tooltip title="Коэффициент расхода сырья. Запасной вариант, если не настроен скрипт sheet_stock_calc. Пример: 0.5 = на 1 изделие тратится 0.5 листа (с одного листа — 2 изделия)."><QuestionCircleOutlined style={{ color: "#999", cursor: "help" }} /></Tooltip></span>
-                      </div>
-                      <Form.Item
-                        {...field}
-                        name={[field.name, "coefficient"]}
-                        noStyle
-                      >
-                        <InputNumber min={0.01} step={0.1} placeholder="Коэфф." style={{ width: "100%" }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={2}>
-                      {fields.length > 1 && (
-                        <Button type="text" danger icon={<MinusCircleOutlined />} onClick={() => remove(field.name)} />
-                      )}
-                    </Col>
-                  </Row>
-                ))}
-                <Button type="dashed" onClick={() => add({ coefficient: 1 })} block icon={<PlusOutlined />}>
-                  Добавить материал
-                </Button>
-              </>
-            )}
-          </Form.List>
-          <Row gutter={16}>
+          <Row gutter={8}>
             <Col span={12}>
-              <Form.Item name="default_cut_width_mm" label="Ширина отреза, мм" tooltip="Ширина по умолчанию при заказе">
-                <InputNumber min={0} step={1} placeholder="мм" style={{ width: "100%" }} />
-              </Form.Item>
+              <Form.Item name="unit_price" label="Цена за единицу"><InputNumber min={0} prefix="₽" style={{ width: "100%" }} /></Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="default_cut_height_mm" label="Высота отреза, мм" tooltip="Высота по умолчанию при заказе">
-                <InputNumber min={0} step={1} placeholder="мм" style={{ width: "100%" }} />
+              <Form.Item name="unit_type" label="Единица измерения">
+                <Select>
+                  <Select.Option value="piece">шт.</Select.Option>
+                  <Select.Option value="sheet">лист</Select.Option>
+                  <Select.Option value="m2">м²</Select.Option>
+                  <Select.Option value="roll">рулон</Select.Option>
+                  <Select.Option value="set">комплект</Select.Option>
+                </Select>
               </Form.Item>
             </Col>
           </Row>
-          <Row gutter={16}>
-            <Col span={8}>
-          <Form.Item name="supplier_url" label="Ссылка на товар" tooltip="URL страницы товара у поставщика">
-            <Input placeholder="https://..." />
-          </Form.Item>
-            </Col>
-          </Row>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Состав под-продукта (сырьё) можно настроить позже, отредактировав его в каталоге.
+          </Typography.Text>
         </Form>
       </Modal>
       <Drawer
@@ -389,11 +687,14 @@ export default function ProductsPage() {
             )}
             {detailProduct.raw_materials && detailProduct.raw_materials.length > 0 ? (
               <>
-                <Descriptions.Item label="Сырьё">
-                  {detailProduct.raw_materials.map(m => m.raw_material_name || `#${m.raw_material_id}`).join(", ")}
-                </Descriptions.Item>
-                <Descriptions.Item label="Коэффициенты">
-                  {detailProduct.raw_materials.map(m => `${m.raw_material_name || `#${m.raw_material_id}`}: ${m.coefficient}`).join("; ")}
+                <Descriptions.Item label="Компоненты">
+                  {detailProduct.raw_materials.map(m => {
+                    const name = m.component_product_name || m.raw_material_name || m.name || `#${m.component_product_id || m.raw_material_id}`;
+                    const kind = m.component_product_id ? "продукт" : "сырьё";
+                    const qty = m.quantity_per_unit && m.quantity_per_unit > 1 ? ` ×${m.quantity_per_unit}` : "";
+                    const price = m.price_per_unit != null ? ` (${m.price_per_unit}₽)` : "";
+                    return `${name}${qty}${price} [${kind}]`;
+                  }).join(", ")}
                 </Descriptions.Item>
               </>
             ) : detailProduct.raw_material_id ? (
@@ -422,7 +723,26 @@ export default function ProductsPage() {
       <CalculatorModal
         open={calcModalOpen}
         onClose={() => setCalcModalOpen(false)}
-        onApply={(price) => form.setFieldsValue({ unit_price: Math.round(price * 100) / 100 })}
+        onApply={(price, _qty, components) => {
+          form.setFieldsValue({ unit_price: Math.round(price * 100) / 100 });
+          if (components && components.length > 0) {
+            const existing = form.getFieldValue("raw_materials") as any[] | undefined;
+            const existingByIndex = existing ?? [];
+            const updated = components.map((c, idx) => {
+              const ex = existingByIndex[idx];
+              return {
+                ...ex,
+                name: c.name,
+                price_per_unit: Math.round(c.price * 100) / 100,
+                quantity_per_unit: ex?.quantity_per_unit ?? 1,
+                coefficient: ex?.coefficient ?? 1,
+                raw_material_id: ex?.raw_material_id,
+              };
+            });
+            form.setFieldsValue({ raw_materials: updated });
+            message.info(`Заполнено компонентов: ${components.length}. Назначьте сырьё каждому.`);
+          }
+        }}
       />
       <AuditLogDrawer
         open={!!auditOpen && !!auditEntity}

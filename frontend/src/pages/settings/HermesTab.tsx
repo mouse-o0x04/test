@@ -11,6 +11,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
   Spin,
@@ -23,10 +24,12 @@ import {
   FileTextOutlined,
   SendOutlined,
   ReloadOutlined,
+  EditOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   createAgent,
   deleteAgent,
@@ -39,6 +42,8 @@ import {
   DailyReportPreview,
 } from "../../api/hermes";
 import type { HermesAgent, HermesAgentFormData } from "../../types";
+import { useColumnState, applyColumnWidths } from "../../hooks/useColumnState";
+import { ResizableHeaderCell } from "../../components/ResizableHeaderCell";
 
 const EVENT_TYPES = [
   { value: "order.created", label: "Заказ создан" },
@@ -236,12 +241,18 @@ export default function HermesTab() {
     { title: "Статус", dataIndex: "is_active", key: "is_active", render: (v: boolean) => <Tag color={v ? "green" : "red"}>{v ? "активен" : "неактивен"}</Tag> },
     { title: "Последний раз", dataIndex: "last_seen", key: "last_seen", render: (v: string | null) => v ? dayjs(v).format("DD.MM.YYYY HH:mm") : "никогда" },
     {
-      title: "", key: "actions", width: 180,
+      title: "Действия", key: "actions", width: 120,
       render: (_: unknown, record: HermesAgent) => (
         <Space>
-          <Button type="link" size="small" onClick={() => openEdit(record)}>Ред.</Button>
-          <Button type="link" size="small" onClick={() => { setSelectedAgent(record); setEventModalOpen(true); }}>Событие</Button>
-          <Button type="link" size="small" danger onClick={() => deleteMutation.mutate(record.id)}>Удал.</Button>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
+          <Tooltip title="Отправить событие">
+            <Button type="link" size="small" icon={<SendOutlined />} onClick={() => { setSelectedAgent(record); setEventModalOpen(true); }} />
+          </Tooltip>
+          <Tooltip title="Удалить">
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteMutation.mutate(record.id)} />
+          </Tooltip>
         </Space>
       ),
     },

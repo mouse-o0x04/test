@@ -8,6 +8,7 @@ import {
   Drawer,
   Empty,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
@@ -37,14 +38,18 @@ import KanbanBoard from "../components/KanbanBoard";
 import { textFilter, numberFilter, selectFilter, dateRangeFilter } from "../components/TableFilters";
 import { useAuth } from "../hooks/useAuth";
 import { useColumnSettings } from "../hooks/useColumnSettings";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { useTablePagination } from "../hooks/useTablePagination";
 import { useEntityFilters } from "../hooks/useEntityFilters";
 import { useViewMode } from "../hooks/useViewMode";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import type { Order, OrderFormData, OrderHistoryItem, OrderItem, OrderSettingsItem, User } from "../types";
+import { copyToClipboard } from "../utils/clipboard";
 import { ORDER_STATUSES } from "../types";
 import { toSortOrder } from "../utils/sort";
 
 const statusLabels: Record<string, string> = {
-  new: "Новый", in_progress: "В работе", ready: "Готов", delivered: "Отдали",
+  new: "Новый", in_progress: "В работе", post_processing: "Постобработка", ready: "Готов", delivered: "Отдали",
 };
 
 function useDisplayFormat(scriptName: string | undefined, data: Record<string, unknown>) {
@@ -92,7 +97,7 @@ function GroupedMaterialDisplay({ rmId, info }: { rmId: string; info: GroupedMat
   const uniqueLabels = [...new Set(productLabels)];
   const rollLabel = (n: number) => n === 1 ? "рулон" : n >= 2 && n <= 4 ? "рулона" : "рулонов";
 
-  const scriptData = { totalMeters: total, rollLength: info.rollLength, rolls: rollsTaken, leftover: remaining, materialName: info.name, productLabels: uniqueLabels };
+  const scriptData = { totalMeters: total, totalQuantity: total, rollLength: info.rollLength, rolls: rollsTaken, leftover: remaining, materialName: info.name, productLabels: uniqueLabels };
   const scriptResult = useDisplayFormat(info.displayFormatScript, scriptData);
 
   if (scriptResult) {
@@ -125,29 +130,27 @@ function parsePaths(raw: string | undefined): string[] {
   return expanded;
 }
 
-function fallbackCopy(text: string): boolean {
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.select();
-  const ok = document.execCommand("copy");
-  document.body.removeChild(ta);
-  return ok;
+function formatDeadline(deadlineStart?: string, deadline?: string): string {
+  const s = deadlineStart ? dayjs(deadlineStart) : null;
+  const e = deadline ? dayjs(deadline) : null;
+  if (!s && !e) return "-";
+  const hasTime = (d: dayjs.Dayjs) => d.hour() !== 0 || d.minute() !== 0;
+  const time = (s && hasTime(s)) || (e && hasTime(e));
+  const fmt = time ? "DD.MM.YYYY HH:mm" : "DD.MM.YYYY";
+  if (s && e && !s.isSame(e)) {
+    return `${s.format("DD.MM.YYYY")} - ${e.format(fmt)}`;
+  }
+  return (e || s)!.format(fmt);
 }
 
-function copyToClipboard(text: string) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(
-      () => message.success("Скопировано"),
-      () => {
-        fallbackCopy(text) ? message.success("Скопировано") : message.error("Не удалось скопировать");
-      },
-    );
-  } else {
-    fallbackCopy(text) ? message.success("Скопировано") : message.error("Не удалось скопировать");
-  }
+function deadlineColor(deadlineStart?: string, deadline?: string): string {
+  const today = dayjs().startOf("day");
+  const e = deadline ? dayjs(deadline) : null;
+  if (!e) return "";
+  const diff = e.startOf("day").diff(today, "day");
+  if (diff <= 0) return "#cf1322";
+  if (diff <= 2) return "#d4b106";
+  return "";
 }
 
 const ALL_ORDER_COLUMNS = [
@@ -159,8 +162,8 @@ const ALL_ORDER_COLUMNS = [
   { key: "deadline", title: "Дедлайн" },
   { key: "designer", title: "Дизайнер" },
   { key: "workers", title: "Работники" },
-  { key: "layout", title: "Макет" },
   { key: "path", title: "Путь" },
+  { key: "layout_type", title: "Макет" },
   { key: "source", title: "Где" },
   { key: "actions", title: "Действия", alwaysShow: true },
 ];
@@ -175,6 +178,7 @@ export default function OrdersPage() {
   const canViewPrices = hasPermission("prices.view");
   const canEditOrders = hasPermission("orders.edit");
   const colSettings = useColumnSettings("orders", ALL_ORDER_COLUMNS);
+  const { widths, setWidth } = useColumnState("orders");
 
   const entityFilters = useEntityFilters("orders");
   const [editingStatusId, setEditingStatusId] = useState<number | null>(null);
@@ -183,6 +187,7 @@ export default function OrdersPage() {
   const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<number | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const { paginationConfig, onPaginationChange } = useTablePagination();
 
   const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
   const { data: rawMaterials } = useQuery({ queryKey: ["rawMaterials"], queryFn: getRawMaterials });
@@ -222,32 +227,87 @@ export default function OrdersPage() {
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => updateOrder(id, { status }),
+    onMutate: async ({ id, status }) => {
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      const prev = queryClient.getQueryData<Order[]>(["orders"]);
+      if (prev) {
+        queryClient.setQueryData<Order[]>(["orders"], prev.map((o) => o.id === id ? { ...o, status } : o));
+      }
+      return { prev };
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); queryClient.invalidateQueries({ queryKey: ["writeoffs"] }); message.success("Статус обновлён"); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+    onError: (err: { response?: { data?: { detail?: string } } }, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["orders"], ctx.prev);
+      message.error(err.response?.data?.detail || "Ошибка");
+    },
   });
 
   const workersMutation = useMutation({
     mutationFn: ({ id, workers }: { id: number; workers: string[] }) => updateOrder(id, { workers }),
+    onMutate: async ({ id, workers }) => {
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      const prev = queryClient.getQueryData<Order[]>(["orders"]);
+      if (prev) {
+        queryClient.setQueryData<Order[]>(["orders"], prev.map((o) => o.id === id ? { ...o, workers } : o));
+      }
+      return { prev };
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Работники обновлены"); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+    onError: (err: { response?: { data?: { detail?: string } } }, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["orders"], ctx.prev);
+      message.error(err.response?.data?.detail || "Ошибка");
+    },
   });
 
   const designerMutation = useMutation({
     mutationFn: ({ id, designer }: { id: number; designer: string }) => updateOrder(id, { designer }),
+    onMutate: async ({ id, designer }) => {
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      const prev = queryClient.getQueryData<Order[]>(["orders"]);
+      if (prev) {
+        queryClient.setQueryData<Order[]>(["orders"], prev.map((o) => o.id === id ? { ...o, designer } : o));
+      }
+      return { prev };
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Дизайнер обновлён"); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+    onError: (err: { response?: { data?: { detail?: string } } }, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["orders"], ctx.prev);
+      message.error(err.response?.data?.detail || "Ошибка");
+    },
   });
 
   const layoutMutation = useMutation({
     mutationFn: ({ id, layout_type }: { id: number; layout_type: string }) => updateOrder(id, { layout_type }),
+    onMutate: async ({ id, layout_type }) => {
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      const prev = queryClient.getQueryData<Order[]>(["orders"]);
+      if (prev) {
+        queryClient.setQueryData<Order[]>(["orders"], prev.map((o) => o.id === id ? { ...o, layout_type } : o));
+      }
+      return { prev };
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Макет обновлён"); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+    onError: (err: { response?: { data?: { detail?: string } } }, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["orders"], ctx.prev);
+      message.error(err.response?.data?.detail || "Ошибка");
+    },
   });
 
   const sourceMutation = useMutation({
     mutationFn: ({ id, source }: { id: number; source: string }) => updateOrder(id, { source }),
+    onMutate: async ({ id, source }) => {
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      const prev = queryClient.getQueryData<Order[]>(["orders"]);
+      if (prev) {
+        queryClient.setQueryData<Order[]>(["orders"], prev.map((o) => o.id === id ? { ...o, source } : o));
+      }
+      return { prev };
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["orders"] }); message.success("Где обновлено"); },
-    onError: (err: { response?: { data?: { detail?: string } } }) => { message.error(err.response?.data?.detail || "Ошибка"); },
+    onError: (err: { response?: { data?: { detail?: string } } }, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["orders"], ctx.prev);
+      message.error(err.response?.data?.detail || "Ошибка");
+    },
   });
 
   const processingMethodMutation = useMutation({
@@ -308,7 +368,7 @@ export default function OrdersPage() {
     moveMutation.mutate({ id: orderId, status: newStatus });
   };
 
-  const statusTagColors: Record<string, string> = { new: "blue", in_progress: "orange", ready: "green", delivered: "default" };
+  const statusTagColors: Record<string, string> = { new: "blue", in_progress: "orange", post_processing: "orange", ready: "green", delivered: "default" };
 
   const rows: OrderRow[] = useMemo(() => {
     return (orders ?? []).map((o) => ({ ...o }));
@@ -318,7 +378,8 @@ export default function OrdersPage() {
     let data = rows.filter((o) => {
       if (entityFilters.search) {
         const q = entityFilters.search.toLowerCase();
-        const desc = o.description?.toLowerCase() || "";
+        let desc = o.description?.toLowerCase() || "";
+        if (desc.startsWith("{")) { try { desc = (JSON.parse(o.description!).text || "").toLowerCase(); } catch {} }
         if (!o.client_name?.toLowerCase().includes(q) && !desc.includes(q) && !o.status?.toLowerCase().includes(q) && !String(o.id).includes(q)) return false;
       }
       const f = entityFilters.filters;
@@ -326,7 +387,10 @@ export default function OrdersPage() {
       if (f.client && (f.client as string[]).length > 0 && !(f.client as string[]).includes(o.client_name || "")) return false;
       if (f.designer && (f.designer as string[]).length > 0 && !(f.designer as string[]).includes(o.designer || "")) return false;
       if (f.workers && (f.workers as string[]).length > 0 && (!Array.isArray(o.workers) || !(f.workers as string[]).some((w) => o.workers!.includes(w)))) return false;
-      if (f.source && (f.source as string[]).length > 0 && !(f.source as string[]).includes(o.source || "")) return false;
+      if (f.source && (f.source as string[]).length > 0) {
+        const orderSources = (o.source || "").split(", ").filter(Boolean);
+        if (!(f.source as string[]).some((s) => orderSources.includes(s))) return false;
+      }
       if (f.total_price && (f.total_price as string[]).length > 0) {
         const str = String((f.total_price as string[])[0]);
         const [minStr, maxStr] = str.split(",");
@@ -383,10 +447,14 @@ export default function OrdersPage() {
   };
 
   const renderDescription = (record: OrderRow) => {
-    if (record.description) return <Typography.Text ellipsis style={{ maxWidth: 280 }}>{record.description}</Typography.Text>;
+    let desc = record.description;
+    if (desc && desc.trim().startsWith("{")) {
+      try { desc = JSON.parse(desc).text || ""; } catch {}
+    }
+    if (desc) return <Typography.Text ellipsis style={{ display: "block", maxWidth: "100%" }}>{desc}</Typography.Text>;
     if (record.items?.length) {
       const parts = record.items.map((i) => `${i.product_name || `#${i.product_id}`} × ${i.quantity}${i.product_unit ? " " + i.product_unit : ""}`);
-      return <Typography.Text ellipsis style={{ maxWidth: 280 }}>{parts.join(", ")}</Typography.Text>;
+      return <Typography.Text ellipsis style={{ display: "block", maxWidth: "100%" }}>{parts.join(", ")}</Typography.Text>;
     }
     return "—";
   };
@@ -427,8 +495,13 @@ export default function OrdersPage() {
     });
 
     const cols = [
-      { title: "ID", dataIndex: "id", key: "id", width: 60, sorter: (a: OrderRow, b: OrderRow) => a.id - b.id, sortOrder: toSortOrder(entityFilters.sortField, "id", entityFilters.sortDirection) },
-      { title: "Клиент", dataIndex: "client_name", key: "client", ...textFilter<OrderRow>("client_name", "Клиент", saveClientFilter), filters: clientNames.map((n) => ({ text: n!, value: n! })), ...selectFilterDropdown(clientNames.map((n) => ({ text: n || "", value: n || "" })), saveClientFilter), sorter: (a: OrderRow, b: OrderRow) => (a.client_name || "").localeCompare(b.client_name || ""), filteredValue: (entityFilters.filters["client"] as string[]) ?? null, sortOrder: toSortOrder(entityFilters.sortField, "client", entityFilters.sortDirection) },
+      { title: "ID", dataIndex: "id", key: "id", width: 1, resizable: false, ellipsis: true, onCell: () => ({ className: "nc-col-id" }), onHeaderCell: () => ({ className: "nc-col-id" }), sorter: (a: OrderRow, b: OrderRow) => a.id - b.id, sortOrder: toSortOrder(entityFilters.sortField, "id", entityFilters.sortDirection) },
+      { title: "Клиент", key: "client", render: (_: unknown, record: OrderRow) => {
+        if (record.clients && record.clients.length > 0) {
+          return record.clients.map(c => c.name).join(" / ");
+        }
+        return record.client_name || `#${record.client_id}`;
+      }, ...textFilter<OrderRow>("client_name", "Клиент", saveClientFilter), filters: clientNames.map((n) => ({ text: n!, value: n! })), ...selectFilterDropdown(clientNames.map((n) => ({ text: n || "", value: n || "" })), saveClientFilter), sorter: (a: OrderRow, b: OrderRow) => (a.client_name || "").localeCompare(b.client_name || ""), filteredValue: (entityFilters.filters["client"] as string[]) ?? null, sortOrder: toSortOrder(entityFilters.sortField, "client", entityFilters.sortDirection) },
       { title: "Описание", key: "description", render: (_: unknown, record: OrderRow) => renderDescription(record), width: 300 },
       ...(canViewPrices ? [{ title: "Сумма", dataIndex: "total_price", key: "total_price", render: (v: number) => `${v.toLocaleString()} ₽`, ...numberFilter<OrderRow>("total_price", { onApply: savePriceFilter }), sorter: (a: OrderRow, b: OrderRow) => a.total_price - b.total_price, filteredValue: (entityFilters.filters["total_price"] as string[]) ?? null, sortOrder: toSortOrder(entityFilters.sortField, "total_price", entityFilters.sortDirection) }] : []),
       { title: "Статус", dataIndex: "status", key: "status", width: 150, ...selectFilter<OrderRow>("status", ORDER_STATUSES.map((s) => ({ text: statusLabels[s] || s, value: s }))), ...selectFilterDropdown(ORDER_STATUSES.map((s) => ({ text: statusLabels[s] || s, value: s })), saveStatusFilter), render: (_: string, record: OrderRow) => {
@@ -452,12 +525,21 @@ export default function OrdersPage() {
           );
         }
         return (
-          <Tag color={statusTagColors[record.status] || "default"} style={{ margin: 0, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setEditingStatusId(record.id); }}>
-            {statusLabels[record.status] || record.status}
-          </Tag>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <Tag color={statusTagColors[record.status] || "default"} style={{ margin: 0, cursor: "pointer", alignSelf: "flex-start" }} onClick={(e) => { e.stopPropagation(); setEditingStatusId(record.id); }}>
+              {statusLabels[record.status] || record.status}
+            </Tag>
+            <Progress
+              percent={record.progress ?? 0}
+              size="small"
+              status={(record.progress ?? 0) === 100 ? "success" : "active"}
+              showInfo={false}
+              style={{ minWidth: 60 }}
+            />
+          </div>
         );
       }, filteredValue: (entityFilters.filters["status"] as string[]) ?? null },
-      { title: "Дедлайн", dataIndex: "deadline", key: "deadline", ...dateRangeFilter<OrderRow>("deadline", saveDeadlineFilter), render: (v: string) => (v ? dayjs(v).format("DD.MM.YYYY") : "-"), sorter: (a: OrderRow, b: OrderRow) => (a.deadline || "").localeCompare(b.deadline || ""), filteredValue: (entityFilters.filters["deadline"] as string[]) ?? null, sortOrder: toSortOrder(entityFilters.sortField, "deadline", entityFilters.sortDirection) },
+      { title: "Сроки", key: "deadline", ...dateRangeFilter<OrderRow>("deadline", saveDeadlineFilter), render: (_: unknown, r: OrderRow) => { const text = formatDeadline(r.deadline_start, r.deadline); const color = deadlineColor(r.deadline_start, r.deadline); return color ? <span style={{ color, fontWeight: 600 }}>{text}</span> : text; }, sorter: (a: OrderRow, b: OrderRow) => (a.deadline || "").localeCompare(b.deadline || ""), filteredValue: (entityFilters.filters["deadline"] as string[]) ?? null, sortOrder: toSortOrder(entityFilters.sortField, "deadline", entityFilters.sortDirection) },
       {
         title: "Дизайнер", dataIndex: "designer", key: "designer",
         filters: (designerColors ?? []).map((d) => ({ text: d.name, value: d.name })),
@@ -573,12 +655,13 @@ export default function OrdersPage() {
           const displayName = v || layoutOptions?.[0]?.name || "";
           const color = getColor(layoutOptions, displayName);
           return (
-            <span
-              style={{ display: "inline-block", padding: "1px 8px", borderRadius: 4, fontSize: 12, cursor: "pointer", background: (color || "#1677ff") + "18", color: color || "#1677ff", border: `1px solid ${color || "#1677ff"}40`, lineHeight: "22px" }}
+            <Tag
+              color={color}
+              style={{ cursor: "pointer" }}
               onClick={(e) => { e.stopPropagation(); setEditingLayoutId(record.id); }}
             >
               {displayName || "+ Добавить"}
-            </span>
+            </Tag>
           );
         },
         filteredValue: (entityFilters.filters["layout"] as string[]) ?? null,
@@ -593,15 +676,16 @@ export default function OrdersPage() {
             return (
               <div onClick={(e) => e.stopPropagation()}>
                 <Select
+                  mode="multiple"
                   allowClear
-                  value={v || undefined}
+                  value={v ? v.split(", ").filter(Boolean) : []}
                   size="small"
-                  style={{ width: 160 }}
+                  style={{ width: 250 }}
                   options={(sourceOptions ?? []).map((s) => ({ label: s.name, value: s.name }))}
                   autoFocus
                   open
                   onChange={(val) => {
-                    sourceMutation.mutate({ id: record.id, source: val || "" });
+                    sourceMutation.mutate({ id: record.id, source: (val || []).join(", ") });
                     setEditingSourceId(null);
                   }}
                   onBlur={() => setEditingSourceId(null)}
@@ -609,13 +693,19 @@ export default function OrdersPage() {
               </div>
             );
           }
-          const color = getColor(sourceOptions, v);
+          const sources = v ? v.split(", ").filter(Boolean) : [];
           return (
             <span
-              style={{ display: "inline-block", padding: "1px 8px", borderRadius: 4, fontSize: 12, cursor: "pointer", background: color + "18", color, border: `1px solid ${color}40`, lineHeight: "22px" }}
+              style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", cursor: "pointer" }}
               onClick={(e) => { e.stopPropagation(); setEditingSourceId(record.id); }}
             >
-              {v || "+ Добавить"}
+              {sources.length > 0 ? sources.map((s) => (
+                <Tag key={s} color={getColor(sourceOptions, s)}>
+                  {s}
+                </Tag>
+              )) : (
+                <Tag>+ Добавить</Tag>
+              )}
             </span>
           );
         },
@@ -626,16 +716,20 @@ export default function OrdersPage() {
   }, [entityFilters.filters, entityFilters.sortField, entityFilters.sortDirection, clientNames, canViewPrices, designerColors, workerColors, layoutOptions, sourceOptions, statusTagColors, renderDescription, renderPathCell, editingDesignerId, editingLayoutId, editingSourceId]);
 
   const actionColumn = {
-    title: "Действия", key: "actions", width: 160,
+    title: "Действия", key: "actions", width: 90, resizable: false,
     render: (_: unknown, record: OrderRow) => (
       <Space onClick={(e) => e.stopPropagation()}>
-        <Button type="link" onClick={(e) => { e.stopPropagation(); openEdit(record); }}>Редактировать</Button>
+        <Tooltip title="Редактировать">
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); openEdit(record); }} />
+        </Tooltip>
         <Popconfirm title="Удалить заказ?" onConfirm={() => deleteMutation.mutate(record.id)}>
-          <Button type="link" danger>Удалить</Button>
+          <Tooltip title="Удалить">
+            <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+          </Tooltip>
         </Popconfirm>
       </Space>
     ),
-  };
+  } as unknown as typeof baseColumns[number];
 
   const columns = useMemo(() => {
     const colMap = new Map<string, typeof baseColumns[number]>();
@@ -652,6 +746,8 @@ export default function OrdersPage() {
       .filter(Boolean) as typeof baseColumns[number][];
     return ordered;
   }, [colSettings.orderedVisibleKeys, baseColumns, canViewPrices, actionColumn]);
+
+  const tableColumns = useMemo(() => applyColumnWidths(columns, widths, setWidth), [columns, widths, setWidth]);
 
   return (
     <>
@@ -693,14 +789,16 @@ export default function OrdersPage() {
       {viewMode === "table" ? (
         <Table
           dataSource={filteredData}
-          columns={columns}
+          columns={tableColumns}
+          components={{ header: { cell: ResizableHeaderCell } }}
           rowKey="id"
           loading={isLoading}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `Всего: ${t}` }}
+          pagination={paginationConfig}
           size="small"
           scroll={{ x: "max-content" }}
           rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
-          onChange={(_pagination, _filters, sorter) => {
+          onChange={(pagination, _filters, sorter) => {
+            onPaginationChange(pagination);
             if (!entityFilters.loaded) return;
             const s = Array.isArray(sorter) ? sorter[0] : sorter;
             if (s && s.columnKey && s.order) {
@@ -759,7 +857,11 @@ export default function OrdersPage() {
         {detailOrder && (
           <>
             <Descriptions column={1} bordered size="small">
-              <Descriptions.Item label="Клиент">{detailOrder.client_name || `#${detailOrder.client_id}`}</Descriptions.Item>
+              <Descriptions.Item label="Клиент">
+                {detailOrder.clients && detailOrder.clients.length > 0
+                  ? detailOrder.clients.map(c => c.name).join(" / ")
+                  : detailOrder.client_name || `#${detailOrder.client_id}`}
+              </Descriptions.Item>
               <Descriptions.Item label="Статус">
                 <Tag color={statusTagColors[detailOrder.status] || "default"}>{statusLabels[detailOrder.status] || detailOrder.status}</Tag>
               </Descriptions.Item>
@@ -768,14 +870,34 @@ export default function OrdersPage() {
                   <Typography.Text strong style={{ fontSize: 16, color: "#1677ff" }}>{detailOrder.total_price.toLocaleString()} ₽</Typography.Text>
                 </Descriptions.Item>
               )}
-              <Descriptions.Item label="Дедлайн">
-                {detailOrder.deadline ? dayjs(detailOrder.deadline).format("DD.MM.YYYY") : "—"}
+              <Descriptions.Item label="Сроки">
+                {formatDeadline(detailOrder.deadline_start, detailOrder.deadline)}
               </Descriptions.Item>
-              {detailOrder.description && (
-                <Descriptions.Item label="Описание">
-                  <div style={{ whiteSpace: "pre-line" }}>{detailOrder.description}</div>
-                </Descriptions.Item>
-              )}
+              {detailOrder.description && (() => {
+                let descText = detailOrder.description;
+                let images: { url: string; name: string; size: number }[] = [];
+                if (descText.trim().startsWith("{")) {
+                  try {
+                    const parsed = JSON.parse(descText);
+                    descText = parsed.text || "";
+                    images = parsed.images || [];
+                  } catch {}
+                }
+                return (
+                  <Descriptions.Item label="Описание">
+                    {descText && <div style={{ whiteSpace: "pre-line", marginBottom: images.length ? 8 : 0 }}>{descText}</div>}
+                    {images.length > 0 && (
+                      <Image.PreviewGroup>
+                        <Space wrap size={8}>
+                          {images.map((img) => (
+                            <Image key={img.url} src={img.url} alt={img.name} width={80} height={80} style={{ objectFit: "cover", borderRadius: 4 }} />
+                          ))}
+                        </Space>
+                      </Image.PreviewGroup>
+                    )}
+                  </Descriptions.Item>
+                );
+              })()}
               {detailOrder.notes && (
                 <Descriptions.Item label="Примечания">{detailOrder.notes}</Descriptions.Item>
               )}
@@ -796,7 +918,9 @@ export default function OrdersPage() {
               )}
               {detailOrder.source && (
                 <Descriptions.Item label="Где">
-                  <Tag color={getColor(sourceOptions, detailOrder.source)}>{detailOrder.source}</Tag>
+                  {(detailOrder.source || "").split(", ").filter(Boolean).map((s) => (
+                    <Tag key={s} color={getColor(sourceOptions, s)}>{s}</Tag>
+                  ))}
                 </Descriptions.Item>
               )}
               {detailOrder.path && (
@@ -900,11 +1024,30 @@ export default function OrdersPage() {
                           </Tooltip>
                         )}
                         {r.is_custom && r.raw_materials && r.raw_materials.length > 0 && (
-                          <Tooltip title={r.raw_materials.map((rm) => `${rm.raw_material_name || `#${rm.raw_material_id}`}: ${rm.cut_width_mm}×${rm.cut_height_mm}мм, ${rm.raw_material_qty} ед.`).join("\n")}>
+                          <Tooltip title={r.raw_materials.map((rm) => {
+                            if (rm.component_product_id) {
+                              return `${rm.name || rm.component_product_name || `продукт #${rm.component_product_id}`}: ${rm.quantity || 1} шт${rm.cut_width_mm && rm.cut_height_mm ? `, ${rm.cut_width_mm}×${rm.cut_height_mm}мм` : ""}${rm.unit_price != null ? `, ${rm.unit_price}₽` : ""}`;
+                            }
+                            return `${rm.name || rm.raw_material_name || `сырьё #${rm.raw_material_id}`}: ${rm.cut_width_mm && rm.cut_height_mm ? `${rm.cut_width_mm}×${rm.cut_height_mm}мм, ` : ""}${rm.raw_material_qty} ед.${rm.unit_price != null ? `, ${rm.unit_price}₽` : ""}`;
+                          }).join("\n")}>
                             <Tag style={{ margin: 0, fontSize: 10, cursor: "default" }}>
-                              {r.raw_materials.length} материал(а)
+                              {r.raw_materials.length} компонент(ов)
                             </Tag>
                           </Tooltip>
+                        )}
+                        {!r.is_custom && r.raw_materials && r.raw_materials.length > 0 && (
+                          <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>
+                            {r.raw_materials.filter((rm) => rm.component_product_id).map((rm, ri) => {
+                              const compName = rm.component_product_name || rm.name || `#${rm.component_product_id}`;
+                              const compTotal = rm.quantity ? rm.quantity * r.quantity : r.quantity;
+                              return (
+                                <div key={ri}>
+                                  ↳ {compName} × {compTotal}
+                                  {rm.cut_width_mm && rm.cut_height_mm ? ` ${rm.cut_width_mm}×${rm.cut_height_mm}мм` : ""}
+                                </div>
+                              );
+                            })}
+                          </div>
                         )}
                         {r.is_custom && r.raw_material_id && (!r.raw_materials || r.raw_materials.length === 0) && r.cut_width_mm && r.cut_height_mm && (
                           <Tooltip title={`Сырьё: ${r.raw_material_qty} ед.\nОтрез: ${r.cut_width_mm}×${r.cut_height_mm} мм`}>
@@ -947,6 +1090,7 @@ export default function OrdersPage() {
               for (const item of detailOrder.items) {
                 if (item.raw_materials && item.raw_materials.length > 0) {
                   for (const rm of item.raw_materials) {
+                    if (rm.raw_material_id == null) continue;
                     const rmDef = rawMaterials?.find((r) => r.id === rm.raw_material_id);
                     if (!rmDef || !rm.raw_material_qty) continue;
                     const whItem = warehouseItems?.find((w) => w.raw_material_id === rm.raw_material_id);

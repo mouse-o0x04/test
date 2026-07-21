@@ -1,4 +1,4 @@
-import { PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Button,
   Form,
@@ -10,11 +10,12 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   createUser,
   deleteUser,
@@ -23,6 +24,9 @@ import {
   updateUser,
 } from "../api/auth";
 import { textFilter, selectFilter } from "../components/TableFilters";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { useTablePagination } from "../hooks/useTablePagination";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import type { User } from "../types";
 
 export default function UsersPage() {
@@ -31,6 +35,8 @@ export default function UsersPage() {
   const [editing, setEditing] = useState<User | null>(null);
   const [form] = Form.useForm();
   const [search, setSearch] = useState("");
+  const { widths, setWidth } = useColumnState("users");
+  const { paginationConfig, onPaginationChange } = useTablePagination();
 
   const { data: users, isLoading } = useQuery({ queryKey: ["users"], queryFn: getUsers });
   const { data: roles } = useQuery({ queryKey: ["roles"], queryFn: getRoles });
@@ -68,7 +74,7 @@ export default function UsersPage() {
     return u.username?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q) || u.full_name?.toLowerCase().includes(q);
   });
 
-  const columns = [
+  const baseColumns = [
     { title: "ID", dataIndex: "id", key: "id", width: 60, sorter: (a: User, b: User) => a.id - b.id },
     { title: "Логин", dataIndex: "username", key: "username", ...textFilter<User>("username"), sorter: (a: User, b: User) => a.username.localeCompare(b.username) },
     { title: "Email", dataIndex: "email", key: "email", ...textFilter<User>("email"), sorter: (a: User, b: User) => a.email.localeCompare(b.email) },
@@ -87,17 +93,23 @@ export default function UsersPage() {
       render: (v: boolean) => <Tag color={v ? "green" : "red"}>{v ? "активен" : "заблокирован"}</Tag>,
     },
     {
-      title: "Действия", key: "actions",
+      title: "Действия", key: "actions", width: 90,
       render: (_: unknown, record: User) => (
         <Space>
-          <Button type="link" onClick={() => openEdit(record)}>Редактировать</Button>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
           <Popconfirm title="Удалить пользователя?" onConfirm={() => deleteMutation.mutate(record.id)}>
-            <Button type="link" danger>Удалить</Button>
+            <Tooltip title="Удалить">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
     },
   ];
+
+  const columns = useMemo(() => applyColumnWidths(baseColumns, widths, setWidth), [baseColumns, widths, setWidth]);
 
   return (
     <>
@@ -109,7 +121,7 @@ export default function UsersPage() {
         </Space>
       </Space>
 
-      <Table dataSource={filteredData} columns={columns} rowKey="id" loading={isLoading} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `Всего: ${t}` }} size="small" />
+      <Table dataSource={filteredData} columns={columns} components={{ header: { cell: ResizableHeaderCell } }} rowKey="id" loading={isLoading} pagination={paginationConfig} size="small" onChange={onPaginationChange} />
 
       <Modal title={editing ? "Редактировать пользователя" : "Новый пользователь"} open={modalOpen} onCancel={() => { setModalOpen(false); setEditing(null); }} onOk={() => form.validateFields().then(onFinish).catch(() => {})} confirmLoading={createMutation.isPending || updateMutation.isPending}>
         <Form form={form} layout="vertical" onFinish={onFinish}>

@@ -14,15 +14,17 @@ const { RangePicker } = DatePicker;
 const DEFAULT_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new: { label: "Новый", color: "#1677ff", bg: "#e6f4ff" },
   in_progress: { label: "В работе", color: "#fa8c16", bg: "#fff7e6" },
+  post_processing: { label: "Постобработка", color: "#fa8c16", bg: "#fff7e6" },
   ready: { label: "Готов", color: "#52c41a", bg: "#f6ffed" },
   delivered: { label: "Отдали", color: "#8c8c8c", bg: "#fafafa" },
 };
 
-const MAIN_STATUSES = ["new", "in_progress", "ready", "delivered"];
+const MAIN_STATUSES = ["new", "in_progress", "post_processing", "ready", "delivered"];
 
 const STATUS_BG: Record<string, string> = {
   new: "#e6f4ff",
   in_progress: "#fff7e6",
+  post_processing: "#fff7e6",
   ready: "#f6ffed",
   delivered: "#fafafa",
 };
@@ -76,8 +78,8 @@ function DraggableCard({ order, status, showLeft, showRight, onSelectOrder, move
           {showRight && <Button type="text" size="small" icon={<RightOutlined />} onClick={(e) => { e.stopPropagation(); moveRight(order.id, status); }} style={{ padding: 0, width: 20, height: 20 }} />}
         </Space>
       </div>
-      <Typography.Text strong style={{ display: "block", marginBottom: 4, fontSize: 13 }} ellipsis={{ tooltip: order.description || order.items?.map((i) => i.product_name || `#${i.product_id}`).join(", ") }}>
-        {order.description || (order.items?.length ? order.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${order.id}`)}
+      <Typography.Text strong style={{ display: "block", marginBottom: 4, fontSize: 13 }} ellipsis={{ tooltip: (() => { let d = order.description; if (d?.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d || order.items?.map((i) => i.product_name || `#${i.product_id}`).join(", "); })() }}>
+        {(() => { let d = order.description; if (d?.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d || (order.items?.length ? order.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${order.id}`); })()}
       </Typography.Text>
       <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
         {order.client_name || `Клиент #${order.client_id}`}
@@ -244,7 +246,7 @@ export default function KanbanBoard({ orders, onMoveOrder, onSelectOrder, design
           {activeOrder ? (
             <div style={{ background: "#fff", borderRadius: 8, padding: 12, border: "2px solid #1677ff", boxShadow: "0 4px 16px rgba(0,0,0,0.15)", maxWidth: 280, opacity: 0.9 }}>
               <Typography.Text strong style={{ fontSize: 13 }} ellipsis>
-                {activeOrder.description || (activeOrder.items?.length ? activeOrder.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${activeOrder.id}`)}
+                {(() => { let d = activeOrder.description; if (d?.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d || (activeOrder.items?.length ? activeOrder.items.map((i) => i.product_name || `#${i.product_id}`).join(", ") : `Заказ #${activeOrder.id}`); })()}
               </Typography.Text>
             </div>
           ) : null}

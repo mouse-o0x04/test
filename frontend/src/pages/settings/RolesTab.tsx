@@ -11,6 +11,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -105,12 +106,16 @@ export default function RolesTab() {
       render: (ids: number[]) => <Typography.Text type="secondary">{ids?.length || 0} прав</Typography.Text>,
     },
     {
-      title: "", key: "actions", width: 120,
+      title: "Действия", key: "actions", width: 90,
       render: (_: unknown, record: Role) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
           <Popconfirm title="Удалить роль?" onConfirm={() => deleteMutation.mutate(record.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="Удалить">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),

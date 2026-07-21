@@ -16,8 +16,10 @@ import {
   SwapRightOutlined,
   CheckSquareOutlined,
   PrinterFilled,
+  CopyOutlined,
 } from "@ant-design/icons";
 import {
+  Button,
   Card,
   Checkbox,
   Col,
@@ -25,6 +27,7 @@ import {
   Descriptions,
   Divider,
   Drawer,
+  Image,
   Progress,
   Row,
   Select,
@@ -49,12 +52,14 @@ import { getWarehouseItems } from "../api/warehouse";
 import { useAuth } from "../hooks/useAuth";
 import { useEntityFilters } from "../hooks/useEntityFilters";
 import AIAssistant from "../components/AIAssistant";
+import OrderForm from "../components/OrderForm";
 import type { Order, OrderHistoryItem, OrderItem, OrderSettingsItem } from "../types";
+import { copyToClipboard } from "../utils/clipboard";
 
 const { RangePicker } = DatePicker;
 
 const statusLabels: Record<string, string> = {
-  new: "Новый", in_progress: "В работе", ready: "Готов", delivered: "Отдали",
+  new: "Новый", in_progress: "В работе", post_processing: "Постобработка", ready: "Готов", delivered: "Отдали",
 };
 
 function parsePaths(raw: string | undefined): string[] {
@@ -76,6 +81,14 @@ export default function Dashboard() {
 
   const ef = useEntityFilters("dashboard");
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
+  const [editing, setEditing] = useState<Order | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const openEdit = (order: Order) => {
+    setEditing(order);
+    setDetailOrder(null);
+    setModalOpen(true);
+  };
 
   const statusFilter = (ef.filters.status as string) || null;
   const clientFilter = (ef.filters.client as string) || null;
@@ -94,7 +107,7 @@ export default function Dashboard() {
   };
 
   const { data: clients } = useQuery({ queryKey: ["clients"], queryFn: getClients });
-  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
+  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: getProducts });
   const { data: warehouse } = useQuery({ queryKey: ["warehouse"], queryFn: getWarehouseItems });
 
@@ -156,12 +169,14 @@ export default function Dashboard() {
   });
 
   const filteredOrders = dateFilteredOrders.filter((o) => {
-    if (statusFilter && o.status !== statusFilter) return false;
+    if (statusFilter && o.status !== statusFilter) {
+      if (!(statusFilter === "in_progress" && o.status === "post_processing")) return false;
+    }
     if (!statusFilter && o.status === "delivered") return false;
     return true;
   });
 
-  const inProgressOrders = dateFilteredOrders.filter((o) => o.status === "in_progress");
+  const inProgressOrders = dateFilteredOrders.filter((o) => o.status === "in_progress" || o.status === "post_processing");
   const activeOrders = dateFilteredOrders.filter((o) => o.status !== "delivered");
   const readyOrders = dateFilteredOrders.filter((o) => o.status === "ready");
   const deliveredOrders = dateFilteredOrders.filter((o) => o.status === "delivered");
@@ -199,6 +214,7 @@ export default function Dashboard() {
   const allStatusOptions = [
     { value: "new", label: "Новый" },
     { value: "in_progress", label: "В работе" },
+    { value: "post_processing", label: "Постобработка" },
     { value: "ready", label: "Готов" },
     { value: "delivered", label: "Отдали" },
   ];
@@ -206,7 +222,13 @@ export default function Dashboard() {
   const columns = [
     { title: "ID", dataIndex: "id", key: "id", width: 60, sorter: (a: Order, b: Order) => a.id - b.id },
     { title: "Клиент", dataIndex: "client_name", key: "client" },
-    { title: "Описание", key: "desc", render: (_: unknown, r: Order) => r.description || r.items?.map((i) => i.product_name).join(", ") || "—" },
+    { title: "Описание", key: "desc", render: (_: unknown, r: Order) => {
+      let desc = r.description;
+      if (desc && desc.trim().startsWith("{")) {
+        try { desc = JSON.parse(desc).text || ""; } catch {}
+      }
+      return desc || r.items?.map((i) => i.product_name).join(", ") || "—";
+    } },
     ...(canViewPrices ? [{ title: "Сумма", dataIndex: "total_price", key: "price", render: (v: number) => <span className="nc-price">{v.toLocaleString()} ₽</span>, sorter: (a: Order, b: Order) => a.total_price - b.total_price }] : []),
     {
       title: "Статус", dataIndex: "status", key: "status", width: 130,
@@ -334,7 +356,7 @@ export default function Dashboard() {
                   value={statusFilter}
                   onChange={setStatusFilter}
                   style={{ width: 140 }}
-                  options={Object.entries(statusLabels).filter(([k]) => k !== "delivered").map(([k, v]) => ({ label: v, value: k }))}
+                  options={Object.entries(statusLabels).filter(([k]) => k !== "delivered" && k !== "post_processing").map(([k, v]) => ({ label: v, value: k }))}
                 />
                 <Select
                   allowClear
@@ -375,7 +397,12 @@ export default function Dashboard() {
         title={`Заказ #${detailOrder?.id || ""}`}
         open={!!detailOrder}
         onClose={() => setDetailOrder(null)}
-        width={560}
+        width={800}
+        extra={
+          detailOrder && (
+            <Button onClick={() => openEdit(detailOrder)}>Редактировать</Button>
+          )
+        }
       >
         {detailOrder && (
           <>
@@ -389,12 +416,43 @@ export default function Dashboard() {
                   <Typography.Text strong style={{ fontSize: 16, color: "#1677ff" }}>{detailOrder.total_price.toLocaleString()} ₽</Typography.Text>
                 </Descriptions.Item>
               )}
-              <Descriptions.Item label="Дедлайн">
-                {detailOrder.deadline ? dayjs(detailOrder.deadline).format("DD.MM.YYYY") : "—"}
+              <Descriptions.Item label="Сроки">
+                {(() => {
+                  const s = detailOrder.deadline_start ? dayjs(detailOrder.deadline_start) : null;
+                  const e = detailOrder.deadline ? dayjs(detailOrder.deadline) : null;
+                  if (!s && !e) return "—";
+                  const hasTime = (d: typeof s) => d && (d.hour() !== 0 || d.minute() !== 0);
+                  const time = hasTime(s) || hasTime(e);
+                  const fmt = time ? "DD.MM.YYYY HH:mm" : "DD.MM.YYYY";
+                  if (s && e && !s.isSame(e)) return `${s.format("DD.MM.YYYY")} - ${e.format(fmt)}`;
+                  return (e || s)!.format(fmt);
+                })()}
               </Descriptions.Item>
-              {detailOrder.description && (
-                <Descriptions.Item label="Описание">{detailOrder.description}</Descriptions.Item>
-              )}
+              {detailOrder.description && (() => {
+                let descText = detailOrder.description;
+                let images: { url: string; name: string; size: number }[] = [];
+                if (descText.trim().startsWith("{")) {
+                  try {
+                    const parsed = JSON.parse(descText);
+                    descText = parsed.text || "";
+                    images = parsed.images || [];
+                  } catch {}
+                }
+                return (
+                  <Descriptions.Item label="Описание">
+                    {descText && <div style={{ whiteSpace: "pre-line", marginBottom: images.length ? 8 : 0 }}>{descText}</div>}
+                    {images.length > 0 && (
+                      <Image.PreviewGroup>
+                        <Space wrap size={8}>
+                          {images.map((img) => (
+                            <Image key={img.url} src={img.url} alt={img.name} width={80} height={80} style={{ objectFit: "cover", borderRadius: 4 }} />
+                          ))}
+                        </Space>
+                      </Image.PreviewGroup>
+                    )}
+                  </Descriptions.Item>
+                );
+              })()}
               {detailOrder.notes && (
                 <Descriptions.Item label="Примечания">{detailOrder.notes}</Descriptions.Item>
               )}
@@ -415,7 +473,9 @@ export default function Dashboard() {
               )}
               {detailOrder.source && (
                 <Descriptions.Item label="Где">
-                  <Tag color={getColor(sourceOptions, detailOrder.source)}>{detailOrder.source}</Tag>
+                  {(detailOrder.source || "").split(", ").filter(Boolean).map((s) => (
+                    <Tag key={s} color={getColor(sourceOptions, s)}>{s}</Tag>
+                  ))}
                 </Descriptions.Item>
               )}
               {detailOrder.path && (
@@ -431,7 +491,25 @@ export default function Dashboard() {
 
             <Divider style={{ margin: "16px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <Typography.Text strong>Продукты</Typography.Text>
+              <Space>
+                <Typography.Text strong>Продукты</Typography.Text>
+                <Tooltip title="Скопировать наименование, количество и цену всех продуктов">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      if (!detailOrder) return;
+                      const lines = detailOrder.items.map((i) => {
+                        const name = i.product_name || `#${i.product_id}`;
+                        const price = canViewPrices ? `\t${i.unit_price}` : "";
+                        return `${name}\t${i.quantity}${price}`;
+                      });
+                      copyToClipboard(lines.join("\n"));
+                    }}
+                  />
+                </Tooltip>
+              </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {detailOrder.items.filter((i) => i.is_completed).length} / {detailOrder.items.length} выполнено
               </Typography.Text>
@@ -553,6 +631,13 @@ export default function Dashboard() {
           </>
         )}
       </Drawer>
+
+      <OrderForm
+        open={modalOpen}
+        editing={editing}
+        onClose={() => { setModalOpen(false); setEditing(null); }}
+        onSuccess={() => {}}
+      />
 
       <AIAssistant />
     </div>

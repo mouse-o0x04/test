@@ -28,7 +28,9 @@ const TOOL_LABELS: Record<string, string> = {
   update_product: "Обновление продукта",
   delete_product: "Удаление продукта",
   get_warehouse: "Просмотр склада",
-  update_stock: "Обновление остатков",
+  get_warehouse_item: "Поиск на складе",
+  add_to_stock: "Добавление на склад",
+  set_stock: "Установка остатков",
   get_dashboard_stats: "Статистика CRM",
   fetch_url: "Загрузка страницы",
 };

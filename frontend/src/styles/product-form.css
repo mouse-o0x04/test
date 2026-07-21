@@ -1,0 +1,165 @@
+/* Product form modal layout */
+.product-modal .ant-modal {
+  top: 24px;
+}
+
+.product-modal .ant-modal-content {
+  background: #F7F8FA;
+  border-radius: 16px;
+  padding: 0;
+}
+
+.product-modal .ant-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 32px;
+  background: #fff;
+  border-bottom: 1px solid #E7EBF3;
+  border-radius: 16px 16px 0 0;
+  margin-bottom: 0;
+}
+
+.product-modal .ant-modal-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.product-modal .ant-modal-body {
+  padding: 24px 32px;
+  background: #F7F8FA;
+  max-height: calc(90vh - 180px);
+  overflow-y: auto;
+}
+
+.product-modal .ant-modal-footer {
+  padding: 16px 32px;
+  background: #fff;
+  border-top: 1px solid #E7EBF3;
+  border-radius: 0 0 16px 16px;
+  margin-top: 0;
+}
+
+.product-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.product-form-grid.single {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 768px) {
+  .product-modal .ant-modal {
+    top: 0;
+  }
+  .product-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Card within product form */
+.product-modal .ant-card {
+  border: 1px solid #E7EBF3;
+  border-radius: 12px;
+}
+
+.product-modal .ant-card-head {
+  min-height: 44px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #F0F0F0;
+}
+
+.product-modal .ant-card-head-title {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.product-modal .ant-card-body {
+  padding: 16px;
+}
+
+/* Product header icon */
+.product-modal-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #4F7CFF, #6C9CFF);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Compact form items in product form */
+.product-modal .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.product-modal .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.product-modal .ant-form-item-label > label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1D1D1D;
+}
+
+/* Components table */
+.product-modal .comp-table-wrapper {
+  overflow-x: auto;
+}
+
+.product-modal .comp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.product-modal .comp-table thead th {
+  padding: 8px 6px;
+  text-align: left;
+  font-weight: 500;
+  color: #8C8C8C;
+  font-size: 13px;
+  white-space: nowrap;
+  border-bottom: 1px solid #F0F0F0;
+}
+
+.product-modal .comp-table tbody td {
+  padding: 4px 4px;
+  vertical-align: middle;
+}
+
+.product-modal .comp-table tbody td:last-child {
+  text-align: center;
+  width: 40px;
+}
+
+.product-modal .comp-table .table-input {
+  width: 100%;
+}
+
+/* Divider inside card */
+.product-modal .ant-card .form-divider {
+  border-top: 1px solid #F0F0F0;
+  padding-top: 12px;
+  margin-top: 4px;
+}
+
+.product-modal .form-divider-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1D1D1D;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -76,11 +76,14 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
     const cx = width / 2;
     const cy = height / 2;
 
+    const clientIds = new Set(clients.map((c) => c.id));
+    const visibleOrders = orders.filter((o) => clientIds.has(o.client_id) || o.clients?.some((cl) => clientIds.has(cl.id)));
+
     const clientNodes: GraphNode[] = clients.map((c, i) => {
       const angle = (2 * Math.PI * i) / clients.length;
       const r = Math.min(width, height) * 0.38;
-      const orderCount = orders.filter((o) => o.client_id === c.id).length;
-      const totalSum = orders.filter((o) => o.client_id === c.id).reduce((s, o) => s + o.total_price, 0);
+      const orderCount = visibleOrders.filter((o) => o.client_id === c.id || o.clients?.some((cl) => cl.id === c.id)).length;
+      const totalSum = visibleOrders.filter((o) => o.client_id === c.id || o.clients?.some((cl) => cl.id === c.id)).reduce((s, o) => s + o.total_price, 0);
       return {
         id: `client-${c.id}`,
         label: c.name,
@@ -124,12 +127,14 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
     }
 
     const clientMap = new Map(clients.map((c) => [c.id, `client-${c.id}`]));
-    for (const o of orders) {
-      const clientId = clientMap.get(o.client_id);
-      if (!clientId) continue;
-      const clientNode = clientNodes.find((n) => n.id === clientId);
-      const baseX = clientNode ? clientNode.x : cx;
-      const baseY = clientNode ? clientNode.y : cy;
+    for (const o of visibleOrders) {
+      const orderClientIds = new Set<number>([o.client_id]);
+      if (o.clients) o.clients.forEach((cl) => orderClientIds.add(cl.id));
+
+      const primaryClientId = clientMap.get(o.client_id);
+      const primaryClientNode = primaryClientId ? clientNodes.find((n) => n.id === primaryClientId) : null;
+      const baseX = primaryClientNode ? primaryClientNode.x : cx;
+      const baseY = primaryClientNode ? primaryClientNode.y : cy;
       const angle = (2 * Math.PI * Math.random());
       const r = Math.min(width, height) * 0.06 + Math.random() * 40;
       const orderNode: GraphNode = {
@@ -145,7 +150,10 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
         data: o as unknown as Record<string, unknown>,
       };
       nodeList.push(orderNode);
-      edgeList.push({ source: clientId, target: orderNode.id });
+      for (const cid of orderClientIds) {
+        const edgeClientId = clientMap.get(cid);
+        if (edgeClientId) edgeList.push({ source: edgeClientId, target: orderNode.id });
+      }
     }
 
     nodeList.push(...clientNodes, ...detailMap.values());
@@ -233,7 +241,7 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
   const detailRequisite = selected?.type === "detail" ? (selected.data as Record<string, string>) : null;
 
   const clientOrders = detailClient
-    ? orders.filter((o) => o.client_id === detailClient.id).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    ? orders.filter((o) => o.client_id === detailClient.id || o.clients?.some((c) => c.id === detailClient.id)).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     : [];
 
   const activeOrder = orderDetail || detailOrderNode;
@@ -381,7 +389,7 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
                 },
                 {
                   title: "Описание", dataIndex: "description", key: "description", ellipsis: true,
-                  render: (v: string, r: Order) => v || r.notes || "—",
+                  render: (v: string, r: Order) => { let d = v; if (d?.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d || r.notes || "—"; },
                 },
                 {
                   title: "Сумма", dataIndex: "total_price", key: "total_price", width: 100, align: "right",
@@ -454,7 +462,7 @@ export default function ClientGraph({ clients, orders, width = 900, height = 650
               <Descriptions.Item label="Дедлайн">
                 {activeOrder.deadline ? dayjs(activeOrder.deadline).format("DD.MM.YYYY") : "—"}
               </Descriptions.Item>
-              {activeOrder.description && <Descriptions.Item label="Описание">{activeOrder.description}</Descriptions.Item>}
+              {activeOrder.description && (() => { let d = activeOrder.description; if (d.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d; })() && <Descriptions.Item label="Описание">{(() => { let d = activeOrder.description; if (d.trim().startsWith("{")) try { d = JSON.parse(d).text; } catch {} return d; })()}</Descriptions.Item>}
               {activeOrder.notes && <Descriptions.Item label="Примечания">{activeOrder.notes}</Descriptions.Item>}
               {activeOrder.designer && <Descriptions.Item label="Дизайнер">{activeOrder.designer}</Descriptions.Item>}
               {activeOrder.workers && activeOrder.workers.length > 0 && (

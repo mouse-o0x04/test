@@ -40,3 +40,20 @@ export const calculatePrice = (productId: number, quantity: number) =>
 
 export const getOrderHistory = (orderId: number) =>
   api.get<OrderHistoryItem[]>(`/orders/${orderId}/history`).then((r) => r.data);
+
+export interface OrderImage {
+  url: string;
+  name: string;
+  size: number;
+}
+
+export const uploadOrderImage = (orderId: number, file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return api.post<OrderImage>(`/orders/${orderId}/upload-image`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  }).then((r) => r.data);
+};
+
+export const deleteOrderImage = (orderId: number, filename: string) =>
+  api.delete(`/orders/${orderId}/images/${filename}`);

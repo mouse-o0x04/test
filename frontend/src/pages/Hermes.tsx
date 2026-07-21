@@ -11,12 +11,14 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
+import { DeleteOutlined, EditOutlined, SendOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   createAgent,
   deleteAgent,
@@ -25,6 +27,8 @@ import {
   sendEvent,
   updateAgent,
 } from "../api/hermes";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import type { HermesAgent, HermesAgentFormData } from "../types";
 
 export default function HermesPage() {
@@ -82,6 +86,8 @@ export default function HermesPage() {
       eventForm.resetFields();
     },
   });
+
+  const { widths, setWidth } = useColumnState("hermes");
 
   const openCreate = () => {
     setEditing(null);
@@ -144,25 +150,32 @@ export default function HermesPage() {
     {
       title: "Действия",
       key: "actions",
+      width: 120,
       render: (_: unknown, record: HermesAgent) => (
         <Space>
-          <Button type="link" onClick={() => openEdit(record)}>Редактировать</Button>
-          <Button
-            type="link"
-            onClick={() => {
-              setSelectedAgent(record);
-              setEventModalOpen(true);
-            }}
-          >
-            Отправить событие
-          </Button>
-          <Button type="link" danger onClick={() => deleteMutation.mutate(record.id)}>
-            Удалить
-          </Button>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
+          <Tooltip title="Отправить событие">
+            <Button
+              type="link"
+              size="small"
+              icon={<SendOutlined />}
+              onClick={() => {
+                setSelectedAgent(record);
+                setEventModalOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Удалить">
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteMutation.mutate(record.id)} />
+          </Tooltip>
         </Space>
       ),
     },
   ];
+
+  const tableColumns = useMemo(() => applyColumnWidths(agentColumns, widths, setWidth), [agentColumns, widths, setWidth]);
 
   const eventColumns = [
     { title: "ID", dataIndex: "id", key: "id", width: 60 },
@@ -196,7 +209,8 @@ export default function HermesPage() {
         </Space>
         <Table
           dataSource={agents}
-          columns={agentColumns}
+          columns={tableColumns}
+          components={{ header: { cell: ResizableHeaderCell } }}
           rowKey="id"
           loading={isLoading}
           onRow={(record) => ({

@@ -20,6 +20,7 @@ import {
   Tag,
   Popconfirm,
   Spin,
+  Tooltip,
 } from "antd";
 import { useEffect, useState, useCallback } from "react";
 import {
@@ -176,9 +177,9 @@ export default function BackupTab() {
         }),
     },
     {
-      title: "",
+      title: "Действия",
       key: "actions",
-      width: 50,
+      width: 80,
       render: (_: unknown, record: BackupInfo) => (
         <Popconfirm
           title="Удалить этот бэкап?"
@@ -186,7 +187,9 @@ export default function BackupTab() {
           okText="Удалить"
           cancelText="Отмена"
         >
-          <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+          <Tooltip title="Удалить">
+            <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+          </Tooltip>
         </Popconfirm>
       ),
     },

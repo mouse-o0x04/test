@@ -1,4 +1,4 @@
-import { PlusOutlined, UnorderedListOutlined, DeleteOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { PlusOutlined, UnorderedListOutlined, DeleteOutlined, EditOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import {
   Button,
   Col,
@@ -14,16 +14,20 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createRawMaterial, deleteRawMaterial, getRawMaterials, updateRawMaterial, bulkDeleteRawMaterials } from "../api/rawMaterials";
 import AuditLogDrawer from "../components/AuditLogDrawer";
 import { createWarehouseItem, getWarehouseItems, updateWarehouseItem } from "../api/warehouse";
 import { textFilter } from "../components/TableFilters";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { useTablePagination } from "../hooks/useTablePagination";
 import { useEntityFilters } from "../hooks/useEntityFilters";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import { useViewMode } from "../hooks/useViewMode";
 import type { RawMaterial, RawMaterialFormData } from "../types";
 import { toSortOrder } from "../utils/sort";
@@ -34,8 +38,10 @@ export default function RawMaterialsPage() {
   const [editing, setEditing] = useState<RawMaterial | null>(null);
   const [form] = Form.useForm<RawMaterialFormData>();
   const entityFilters = useEntityFilters("rawMaterials");
+  const { widths, setWidth } = useColumnState("rawMaterials");
   const [viewMode, setViewMode] = useViewMode("rawMaterials", "table");
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const { paginationConfig, onPaginationChange } = useTablePagination();
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditEntity, setAuditEntity] = useState<{ entityType: string; entityId: number; entityName?: string } | null>(null);
 
@@ -152,7 +158,7 @@ export default function RawMaterialsPage() {
     return data;
   })();
 
-  const columns = [
+  const baseColumns = [
     {
       title: "ID",
       dataIndex: "id",
@@ -222,39 +228,42 @@ export default function RawMaterialsPage() {
     {
       title: "Действия",
       key: "actions",
-      width: 220,
+      width: 150,
       render: (_: unknown, record: RawMaterial) => {
         const onWarehouse = warehouseItems?.some((w) => w.raw_material_id === record.id);
         return (
           <Space>
-              <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => { setAuditEntity({ entityType: "raw_material", entityId: record.id, entityName: record.name }); setAuditOpen(true); }}>
-              История
-            </Button>
-            <Button type="link" size="small" onClick={() => openEdit(record)}>
-              Ред.
-            </Button>
-            <Button
-              type="link"
-              size="small"
-              onClick={() => {
-                setWarehouseTarget(record);
-                warehouseForm.resetFields();
-                warehouseForm.setFieldsValue({ quantity: 0, min_quantity: 0 });
-                setWarehouseModalOpen(true);
-              }}
-            >
-              {onWarehouse ? "Ещё" : "На склад"}
-            </Button>
+            <Tooltip title="История">
+              <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => { setAuditEntity({ entityType: "raw_material", entityId: record.id, entityName: record.name }); setAuditOpen(true); }} />
+            </Tooltip>
+            <Tooltip title="Редактировать">
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+            </Tooltip>
+            <Tooltip title={onWarehouse ? "Добавить на склад" : "На склад"}>
+              <Button
+                type="link"
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setWarehouseTarget(record);
+                  warehouseForm.resetFields();
+                  warehouseForm.setFieldsValue({ quantity: 0, min_quantity: 0 });
+                  setWarehouseModalOpen(true);
+                }}
+              />
+            </Tooltip>
             <Popconfirm title="Удалить сырьё?" onConfirm={() => deleteMutation.mutate(record.id)}>
-              <Button type="link" danger size="small">
-                Удалить
-              </Button>
+              <Tooltip title="Удалить">
+                <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           </Space>
         );
       },
     },
   ];
+
+  const columns = useMemo(() => applyColumnWidths(baseColumns, widths, setWidth), [baseColumns, widths, setWidth]);
 
   return (
     <>
@@ -292,12 +301,14 @@ export default function RawMaterialsPage() {
       <Table
         dataSource={filteredData}
         columns={columns}
+        components={{ header: { cell: ResizableHeaderCell } }}
         rowKey="id"
         loading={isLoading}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `Всего: ${t}` }}
+        pagination={paginationConfig}
         size="small"
         rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
-        onChange={(_pagination, filters, sorter) => {
+        onChange={(pagination, filters, sorter) => {
+          onPaginationChange(pagination);
           entityFilters.updateFilters(filters as Record<string, unknown>);
           const s = Array.isArray(sorter) ? sorter[0] : sorter;
           if (s && s.columnKey && s.order) {

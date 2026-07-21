@@ -1,6 +1,6 @@
 import {
   BankOutlined, ApartmentOutlined, DisconnectOutlined, PlusOutlined, UnorderedListOutlined,
-  UserOutlined, MailOutlined, PhoneOutlined, HomeOutlined, PrinterOutlined, DeleteOutlined,
+  UserOutlined, MailOutlined, PhoneOutlined, HomeOutlined, PrinterOutlined, DeleteOutlined, EditOutlined,
 } from "@ant-design/icons";
 import {
   Button, Card, Col, Checkbox, Descriptions, Divider, Drawer, Form, Input, Modal,
@@ -8,15 +8,18 @@ import {
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { attachDetailToClient, createCompanyDetail, deleteCompanyDetail, detachDetailFromClient, getCompanyDetails, updateCompanyDetail } from "../api/companyDetails";
 import { createClient, deleteClient, getClients, updateClient, bulkDeleteClients } from "../api/clients";
 import { getOrderSettings } from "../api/orderSettings";
 import { getOrders, toggleItemCompleted, toggleItemPrinted } from "../api/orders";
 import ClientGraph from "../components/ClientGraph";
 import { textFilter } from "../components/TableFilters";
+import { useColumnState, applyColumnWidths } from "../hooks/useColumnState";
+import { useTablePagination } from "../hooks/useTablePagination";
 import { useEntityFilters } from "../hooks/useEntityFilters";
 import { useViewMode } from "../hooks/useViewMode";
+import { ResizableHeaderCell } from "../components/ResizableHeaderCell";
 import type { Client, ClientFormData, CompanyDetail, CompanyDetailFormData, Order, OrderItem } from "../types";
 import { toSortOrder } from "../utils/sort";
 
@@ -26,6 +29,7 @@ export default function ClientsPage() {
   const [editing, setEditing] = useState<Client | null>(null);
   const [form] = Form.useForm<ClientFormData>();
   const entityFilters = useEntityFilters("clients");
+  const { widths, setWidth } = useColumnState("clients");
   const [viewMode, setViewMode] = useViewMode("clients", "table");
 
   const [detailClient, setDetailClient] = useState<Client | null>(null);
@@ -37,10 +41,11 @@ export default function ClientsPage() {
   const [attachClientId, setAttachClientId] = useState<number | null>(null);
   const [requisiteText, setRequisiteText] = useState("");
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const { paginationConfig, onPaginationChange } = useTablePagination();
 
   const { data: clients, isLoading } = useQuery({ queryKey: ["clients"], queryFn: getClients });
   const { data: allCompanyDetails } = useQuery({ queryKey: ["companyDetails"], queryFn: getCompanyDetails });
-  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders, refetchInterval: 15000 });
+  const { data: orders } = useQuery({ queryKey: ["orders"], queryFn: getOrders });
   const { data: settings } = useQuery({ queryKey: ["orderSettings"], queryFn: () => getOrderSettings() });
 
   const createMutation = useMutation({
@@ -320,10 +325,10 @@ export default function ClientsPage() {
   })();
 
   const clientOrders = detailClient
-    ? (orders ?? []).filter((o) => o.client_id === detailClient.id).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    ? (orders ?? []).filter((o) => o.client_id === detailClient.id || o.clients?.some((c) => c.id === detailClient.id)).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     : [];
 
-  const columns = [
+  const baseColumns = [
     { title: "ID", dataIndex: "id", key: "id", width: 60, sorter: (a: Client, b: Client) => a.id - b.id, sortOrder: toSortOrder(entityFilters.sortField, "id", entityFilters.sortDirection) },
     { title: "Имя", dataIndex: "name", key: "name", ...textFilter<Client>("name", "Имя"), sorter: (a: Client, b: Client) => a.name.localeCompare(b.name), filteredValue: entityFilters.filters["name"] as string[] | null, sortOrder: toSortOrder(entityFilters.sortField, "name", entityFilters.sortDirection) },
     { title: "Email", dataIndex: "email", key: "email", ...textFilter<Client>("email"), sorter: (a: Client, b: Client) => a.email.localeCompare(b.email), filteredValue: entityFilters.filters["email"] as string[] | null, sortOrder: toSortOrder(entityFilters.sortField, "email", entityFilters.sortDirection) },
@@ -331,18 +336,26 @@ export default function ClientsPage() {
     { title: "Компания", dataIndex: "company", key: "company", ...textFilter<Client>("company"), filteredValue: entityFilters.filters["company"] as string[] | null },
     { title: "Реквизиты", key: "details", render: (_: unknown, r: Client) => <Tag color={r.company_details?.length ? "blue" : "default"}>{r.company_details?.length || 0}</Tag> },
     {
-      title: "Действия", key: "actions",
+      title: "Действия", key: "actions", width: 120,
       render: (_: unknown, record: Client) => (
         <Space>
-          <Button type="link" onClick={() => setDetailClient(record)}><BankOutlined /></Button>
-          <Button type="link" onClick={() => openEdit(record)}>Редактировать</Button>
+          <Tooltip title="Реквизиты">
+            <Button type="link" size="small" icon={<BankOutlined />} onClick={() => setDetailClient(record)} />
+          </Tooltip>
+          <Tooltip title="Редактировать">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
           <Popconfirm title="Удалить клиента?" onConfirm={() => deleteMutation.mutate(record.id)}>
-            <Button type="link" danger>Удалить</Button>
+            <Tooltip title="Удалить">
+              <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
     },
   ];
+
+  const columns = useMemo(() => applyColumnWidths(baseColumns, widths, setWidth), [baseColumns, widths, setWidth]);
 
   return (
     <>
@@ -374,12 +387,14 @@ export default function ClientsPage() {
         <Table
           dataSource={filteredData}
           columns={columns}
+          components={{ header: { cell: ResizableHeaderCell } }}
           rowKey="id"
           loading={isLoading}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `Всего: ${t}` }}
+          pagination={paginationConfig}
           size="small"
           rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
-          onChange={(_pagination, filters, sorter) => {
+          onChange={(pagination, filters, sorter) => {
+            onPaginationChange(pagination);
             entityFilters.updateFilters(filters as Record<string, unknown>);
             const s = Array.isArray(sorter) ? sorter[0] : sorter;
             if (s && s.columnKey && s.order) {
@@ -575,7 +590,11 @@ export default function ClientsPage() {
                 </Descriptions.Item>
               )}
               {orderDetail.layout_type && <Descriptions.Item label="Макет">{orderDetail.layout_type}</Descriptions.Item>}
-              {orderDetail.source && <Descriptions.Item label="Где">{orderDetail.source}</Descriptions.Item>}
+              {orderDetail.source && (
+                <Descriptions.Item label="Где">
+                  {(orderDetail.source || "").split(", ").filter(Boolean).join(" / ")}
+                </Descriptions.Item>
+              )}
             </Descriptions>
             <Divider style={{ margin: "16px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>

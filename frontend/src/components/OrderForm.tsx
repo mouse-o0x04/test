@@ -81,12 +81,19 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
 
   useEffect(() => {
     if (open && editing) {
+      const subClientIds = editing.clients?.filter(c => c.id !== editing.client_id).map(c => c.id) || [];
       form.setFieldsValue({
         client_id: editing.client_id,
+        client_ids: subClientIds,
         status: editing.status,
         description: editing.description,
         notes: editing.notes,
-        deadline: editing.deadline ? dayjs(editing.deadline) : undefined,
+        deadline: editing.deadline || undefined,
+        deadline_start: editing.deadline_start || undefined,
+        deadlineSingle: editing.deadline ? dayjs(editing.deadline) : undefined,
+        deadlineRange: (editing.deadline_start && editing.deadline && editing.deadline_start !== editing.deadline)
+          ? [editing.deadline_start ? dayjs(editing.deadline_start) : null, editing.deadline ? dayjs(editing.deadline) : null]
+          : undefined,
         items: editing.items.map((i) => ({
           _itemMode: i.product_id ? "catalog" : "custom",
           product_id: i.product_id,
@@ -111,27 +118,33 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
         workers: editing.workers,
         layout_type: editing.layout_type,
         path: editing.path,
-        source: editing.source,
+        source: editing.source ? editing.source.split(", ").filter(Boolean) : [],
       });
-    } else if (open) {
+    }
+  }, [open, editing]);
+
+  useEffect(() => {
+    if (open && !editing) {
       const draft = loadDraft();
       if (draft) {
-        Modal.confirm({
-          title: "Найден черновик",
-          content: "Восстановить незавершённый заказ?",
-          okText: "Восстановить",
-          cancelText: "Начать заново",
-          onOk() {
-            form.setFieldsValue(draft);
-            setCurrentStep((draft._step as number) || 0);
-          },
-          onCancel() {
-            clearDraft();
-            form.resetFields();
-            form.setFieldsValue({ items: [], status: "new" });
-            setCurrentStep(0);
-          },
-        });
+        setTimeout(() => {
+          Modal.confirm({
+            title: "Найден черновик",
+            content: "Восстановить незавершённый заказ?",
+            okText: "Восстановить",
+            cancelText: "Начать заново",
+            onOk() {
+              form.setFieldsValue(draft);
+              setCurrentStep((draft._step as number) || 0);
+            },
+            onCancel() {
+              clearDraft();
+              form.resetFields();
+              form.setFieldsValue({ items: [], status: "new" });
+              setCurrentStep(0);
+            },
+          });
+        }, 100);
       } else {
         const defaultLayout = layoutOptions?.[0]?.name || "";
         form.resetFields();
@@ -183,12 +196,16 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
 
   const onFinish = (values: Record<string, unknown>) => {
     const v = values;
+    const subClientIds = (v.client_ids as number[] | undefined) || [];
+    const clientIds = [v.client_id as number, ...subClientIds.filter(Boolean)];
     const payload: OrderFormData = {
       client_id: v.client_id as number,
+      client_ids: clientIds.length > 1 ? clientIds : undefined,
       status: v.status as string,
       description: (v.description as string) || undefined,
       notes: (v.notes as string) || undefined,
       deadline: v.deadline ? dayjs(v.deadline as string | number | Date).toISOString() : undefined,
+      deadline_start: v.deadline_start ? dayjs(v.deadline_start as string | number | Date).toISOString() : undefined,
       items: ((v.items as unknown[]) || []).map((i) => {
         const it = i as Record<string, unknown>;
         return {
@@ -203,9 +220,14 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
           raw_materials: ((it.raw_materials as unknown[]) || []).map((rm) => {
             const r = rm as Record<string, unknown>;
             return {
-              raw_material_id: r.raw_material_id as number,
+              raw_material_id: r.raw_material_id as number | undefined,
+              component_product_id: r.component_product_id as number | undefined,
+              raw_material_qty: r.raw_material_qty as number | undefined,
               cut_width_mm: r.cut_width_mm as number | undefined,
               cut_height_mm: r.cut_height_mm as number | undefined,
+              name: r.name as string | undefined,
+              quantity: r.quantity as number | undefined,
+              unit_price: r.unit_price as number | undefined,
             };
           }),
           quantity: it.quantity as number,
@@ -218,10 +240,10 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
         };
       }),
       designer: (v.designer as string) || undefined,
-      workers: (v.workers as string[]) || [],
+      workers: (v.workers as string[]) || editing?.workers || [],
       layout_type: (v.layout_type as string) || undefined,
       path: (v.path as string) || undefined,
-      source: (v.source as string) || undefined,
+      source: Array.isArray(v.source) ? (v.source as string[]).filter(Boolean).join(", ") : (v.source as string) || undefined,
     };
     if (editing) {
       updateMutation.mutate({ id: editing.id, data: payload });
@@ -252,9 +274,11 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
 
   const stepContent = (
     <>
-      <div style={{ display: currentStep === 0 ? "block" : "none" }}><ClientStep form={form} /></div>
+      <div style={{ display: currentStep === 0 ? "block" : "none" }}>
+        <ClientStep form={form} initialClientIds={editing?.clients?.map(c => c.id)} />
+      </div>
       <div style={{ display: currentStep === 1 ? "block" : "none" }}><ProductsStep form={form} calcItemIndex={calcItemIndex} setCalcItemIndex={setCalcItemIndex} setCalcModalOpen={setCalcModalOpen} /></div>
-      <div style={{ display: currentStep === 2 ? "block" : "none" }}><OrderDetailsStep form={form} /></div>
+      <div style={{ display: currentStep === 2 ? "block" : "none" }}><OrderDetailsStep form={form} editing={editing} /></div>
       <div style={{ display: currentStep === 3 ? "block" : "none" }}><OrderConfirmStep form={form} /></div>
     </>
   );
@@ -316,7 +340,8 @@ export default function OrderForm({ open, editing, onClose, onSuccess }: OrderFo
     <Modal
       title={editing ? "Редактировать заказ" : "Новый заказ"}
       open={open}
-      onCancel={handleCancel}
+      onCancel={handleClose}
+      maskClosable={true}
       width="90vw"
       style={{ maxWidth: 1400 }}
       footer={footer}

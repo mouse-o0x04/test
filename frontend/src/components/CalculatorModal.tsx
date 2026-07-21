@@ -71,10 +71,15 @@ function ResultDisplay({ result }: { result: CalcResult }) {
   );
 }
 
+export interface CalcComponent {
+  name: string;
+  price: number;
+}
+
 interface CalculatorModalProps {
   open: boolean;
   onClose: () => void;
-  onApply: (price: number, quantity: number) => void;
+  onApply: (price: number, quantity: number, components?: CalcComponent[]) => void;
 }
 
 export default function CalculatorModal({ open, onClose, onApply }: CalculatorModalProps) {
@@ -146,13 +151,24 @@ export default function CalculatorModal({ open, onClose, onApply }: CalculatorMo
     }
   }, [productType, sra3, visitsky, diplom, pvc, acrylic, gravure, selfAdh, dtf, sublimation, banner, canvas, poster, bracelets, badges, notebook, bags, flags]);
 
+  const calcComponents = useMemo<CalcComponent[] | undefined>(() => {
+    if (!result.details) return undefined;
+    const comps: CalcComponent[] = [];
+    for (const [key, val] of Object.entries(result.details)) {
+      if (typeof val === "number" && val > 0) {
+        comps.push({ name: key, price: val });
+      }
+    }
+    return comps.length > 1 ? comps : undefined;
+  }, [result]);
+
   const handleApply = () => {
     if (result.total <= 0) {
       message.warning("Рассчитайте стоимость перед применением");
       return;
     }
     const unitPrice = currentQty > 0 ? result.total / currentQty : result.total;
-    onApply(unitPrice, currentQty);
+    onApply(unitPrice, currentQty, calcComponents);
     message.success(`Цена применена: ${unitPrice.toLocaleString("ru-RU")} ₽/шт × ${currentQty} шт`);
     onClose();
   };
